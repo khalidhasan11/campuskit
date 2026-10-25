@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CampusKit</string>
+    <string name="title_activity_main">CampusKit</string>
+    <string name="package_name">com.khalidhasan11.campuskit</string>
+    <string name="custom_url_scheme">com.khalidhasan11.campuskit</string>
+</resources>

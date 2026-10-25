@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
+
+// True only inside the Capacitor native shell (Android app). On the web /
+// GitHub Pages build this is always false, so full PWA behaviour (service
+// worker registration, install prompt) is preserved there. In the native
+// app the web service worker must NOT register: the native bridge serves
+// the bundled assets itself, and a web SW could cache/interfere with them.
+const isNativeShell = (): boolean => Capacitor.isNativePlatform();
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -40,6 +48,9 @@ export function usePWAInstall() {
   });
 
   useEffect(() => {
+    // Native shell: there is no browser install prompt to manage.
+    if (isNativeShell()) return;
+
     const media = window.matchMedia('(display-mode: standalone)');
     const handleDisplayChange = (e: MediaQueryListEvent) => {
       if (e.matches) setIsInstalled(true);
@@ -94,6 +105,13 @@ export function useServiceWorkerStatus() {
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
 
   useEffect(() => {
+    // Native shell: never register the web service worker (see note at the
+    // top of this file). The Capacitor bridge serves bundled assets.
+    if (isNativeShell()) {
+      setSwState('unsupported');
+      return;
+    }
+
     if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
       setSwState('unsupported');
       return;

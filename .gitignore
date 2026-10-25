@@ -5,3 +5,15 @@ dist
 *.local
 .DS_Store
 *.tsbuildinfo
+
+# Android signing material must NEVER be committed (release signing uses
+# GitHub Actions Secrets; see .github/workflows/android.yml)
+*.keystore
+*.jks
+keystore.properties
+
+# Android/Gradle generated outputs (android/.gitignore also covers these)
+.gradle/
+android/app/build/
+android/build/
+android/capacitor-cordova-android-plugins/build/

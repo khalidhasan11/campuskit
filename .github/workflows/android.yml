@@ -1,0 +1,180 @@
+name: Build Android APK
+
+# Builds an installable CampusKit APK with Capacitor.
+# - Manual runs (workflow_dispatch) and version-tag pushes (v*) build the APK
+#   and upload it as a workflow artifact.
+# - Tag pushes additionally publish the APK on a public GitHub Release.
+#
+# Signing: if ALL four repository secrets are set
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+#   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# the workflow builds a properly SIGNED release APK. Until then it builds a
+# clearly labelled DEBUG APK (Android debug signature — installable for
+# testing, not a production signature). No keystore is ever committed; the
+# decoded keystore lives in the runner temp dir, outside the repository.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # needed to create the GitHub Release on tag pushes
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies (reproducible)
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Sync web build into Android project
+        run: npx cap sync android
+
+      - name: Read app version
+        id: version
+        working-directory: android
+        run: |
+          VERSION=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "CampusKit version: $VERSION"
+
+      - name: Detect signing secrets
+        id: signing
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PW" ] && [ -n "$KS_ALIAS" ] && [ -n "$KS_KEY_PW" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets are configured: building a SIGNED release APK."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Signing secrets are NOT configured: building a DEBUG APK (debug signature, for testing only)."
+          fi
+
+      - name: Decode release keystore (outside the repo)
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KS_B64" | base64 --decode > "$RUNNER_TEMP/campuskit-release.keystore"
+          test -s "$RUNNER_TEMP/campuskit-release.keystore"
+          echo "Keystore decoded to runner temp dir (size: $(stat -c%s "$RUNNER_TEMP/campuskit-release.keystore") bytes)."
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/campuskit-release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Build debug APK (no signing secrets configured)
+        if: steps.signing.outputs.signed != 'true'
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Collect and verify APK
+        id: apk
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          if [ "$SIGNED" = "true" ]; then
+            SRC="android/app/build/outputs/apk/release/app-release.apk"
+            NAME="CampusKit-v${VERSION}.apk"
+          else
+            SRC="android/app/build/outputs/apk/debug/app-debug.apk"
+            NAME="CampusKit-v${VERSION}-debug.apk"
+          fi
+          test -f "$SRC" || { echo "::error::APK not found at $SRC"; ls -R android/app/build/outputs || true; exit 1; }
+          mkdir -p apk-out
+          cp "$SRC" "apk-out/$NAME"
+          test -s "apk-out/$NAME" || { echo "::error::APK is empty"; exit 1; }
+          SIZE=$(stat -c%s "apk-out/$NAME")
+          echo "path=apk-out/$NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "APK verified: $NAME ($SIZE bytes)"
+          # Badging: package id, versionName, versionCode straight from the APK
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          if [ -n "$AAPT" ]; then
+            "$AAPT" dump badging "apk-out/$NAME" | head -3 | tee badging.txt || true
+          fi
+          {
+            echo "## CampusKit Android APK"
+            echo ""
+            if [ "$SIGNED" = "true" ]; then
+              echo "**Build type: SIGNED RELEASE**"
+            else
+              echo "**Build type: DEBUG (debug-signed, for testing only — NOT a production-signed release)**"
+              echo ""
+              echo "Signing secrets (ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD) are not configured on this repository yet, so this APK carries the standard Android debug signature. To get signed release APKs, add those four secrets and push a new version tag."
+            fi
+            echo ""
+            echo "- File: \`$NAME\`"
+            echo "- Size: $SIZE bytes"
+            if [ -f badging.txt ]; then
+              echo "- Badging: \`$(head -1 badging.txt)\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify release signature (signed builds only)
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK_PATH"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: campuskit-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true
+          body: |
+            ## CampusKit Android — ${{ github.ref_name }}
+
+            Installable Android APK of the CampusKit web app (bundled locally with Capacitor — works fully offline, no account needed).
+
+            **Install:** download the APK below, open it on your Android phone, and allow installation from that source when Android asks.
+
+            ${{ steps.signing.outputs.signed != 'true' && '**Signing status: DEBUG-signed build for testing.** This APK uses the standard Android debug signature because production signing secrets are not configured on this repository yet. It installs and runs normally for testing, but Android may show a warning, and switching between differently-signed builds later will require uninstalling first. Always back up your CampusKit data (Settings → Export backup) before uninstalling.' || '**Signing status: signed release build.**' }}
