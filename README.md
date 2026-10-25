@@ -4,6 +4,32 @@
 
 Free, offline-first student productivity PWA for university students in Bangladesh. No account, no subscription, no premium locks, no ads, no backend, and no AI API required for any core feature.
 
+## 📱 Download the Android APK
+
+Prefer a real app instead of the browser? CampusKit is also published as an installable Android APK (built with Capacitor — the app is bundled inside the APK and works fully offline; it does not just open the website).
+
+- **All releases:** https://github.com/khalidhasan11/campuskit/releases
+- **Direct download (v1.0.0):** https://github.com/khalidhasan11/campuskit/releases/download/v1.0.0/CampusKit-v1.0.0-debug.apk
+- Package: `com.khalidhasan11.campuskit` · Version 1.0.0 (versionCode 1) · Size: 4,240,000 bytes · Requires Android 6.0 (API 23) or newer. The download page is public — no GitHub account needed.
+
+**How to install**
+
+1. Open the direct download link above on your Android phone and download the APK.
+2. Tap the downloaded file to install it.
+3. Android will ask you to allow installation from that source (your browser or Files app) — allow it for this install. This prompt is normal for APKs installed outside the Play Store.
+4. Open CampusKit from your app drawer. No account, no sign-in, no internet needed.
+
+**Release notes — v1.0.0**
+
+- First Android release: all seven tabs (Today, Routine, Attend, CGPA, Exams, Study, Notes) with local data storage, IndexedDB note attachments (images, audio, voice recording), backup export/restore, themes, and full offline use.
+- Permissions: microphone only (for voice notes). The APK requests **no internet permission**.
+
+> **⚠️ Debug signing — please read.** The v1.0.0 APK is a **debug-signed build for testing**, because production signing secrets are not configured on this repository yet. It installs and runs normally, but Android may show an extra warning, and when a differently-signed production build is released later you will need to **uninstall this build before installing the new one** (switching signatures cannot update in place). **Back up first:** Settings → Export backup, so your data can be restored after reinstalling. Always keep a recent backup of your CampusKit data.
+
+### For production signed releases
+
+Properly signed release APKs are produced automatically by the same workflow as soon as these four repository secrets exist (Settings → Secrets and variables → Actions): `ANDROID_KEYSTORE_BASE64` (base64 of your release keystore), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. With them set, pushing a new `v*` tag builds `CampusKit-v<version>.apk` signed with that keystore and publishes it on the release instead of the debug build. The keystore file itself must never be committed to this repository.
+
 > This repository contains the CampusKit build produced in Google AI Studio (app `d9c57795-f6db-4e7f-8c63-887a9d150bca`) and QA-checked locally on Oct 25, 2026. See `QA_REPORT.md` in the project archive for the full verification record, including known pre-publish fixes.
 
 ## Features
