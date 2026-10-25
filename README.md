@@ -38,7 +38,7 @@ npm run build   # vite build -> dist/
 npm run preview
 ```
 
-No `.env` file or API key is needed to run this app. (`.env.example` and the `@google/genai` / `express` / `dotenv` dependencies are unused Google AI Studio boilerplate left in the export; no app code in `src/` calls any AI or network API.)
+No `.env` file or API key is needed to run this app; no app code in `src/` calls any AI or network API. (The unused Google AI Studio boilerplate from the export — the `@google/genai` / `express` / `dotenv` dependencies and the Gemini capability declaration in `metadata.json` — has been removed.)
 
 This project has no unit-test suite of its own. Its calculation functions in `src/utils/dateAndMath.ts` were cross-checked locally against an independent 26-case QA harness covering attendance, CGPA, What-If, calendar-day differences, streaks, weekly totals, and timer save-once behaviour; all areas matched (see the QA report).
 
@@ -46,8 +46,8 @@ This project has no unit-test suite of its own. Its calculation functions in `sr
 
 1. Create a public GitHub repository named `campuskit` and push this project to `main`.
 2. In the repo: Settings → Pages → Source: **GitHub Actions**.
-3. `.github/workflows/deploy.yml` runs on every push to `main`: `npm ci` → `npm run lint` → build → deploy via `actions/deploy-pages`.
-4. **Base path (important):** `vite.config.ts` sets no base, so a plain build targets `/`. The workflow therefore builds with `npx vite build --base=/campuskit/`, which correctly rewrites the bundle, CSS, manifest and icon references in `index.html` for a project site. However, the manifest's `start_url`/`scope`/icon paths, the service-worker registration (`/sw.js`, scope `/` in `src/hooks/usePWA.ts`), the precache list in `public/sw.js`, and the asset injection in `vite.config.ts` are still root-absolute in the source. Those must be made base-relative before relying on offline/PWA behaviour under `/campuskit/` (tracked as a pre-publish fix), or the app can instead be deployed at a domain root (user site `<username>.github.io` or a custom domain), where the current paths are correct as-is.
+3. `.github/workflows/deploy.yml` runs on every push to `main`: `npm ci` → `npm run lint` → `npm run build` → deploy via `actions/deploy-pages`. No `--base` flag is needed.
+4. **Base path:** the app is base-relative throughout, so the same build works at a domain root and under the `/campuskit/` project-site subpath. `vite.config.ts` sets `base: './'` (valid because this is a single-page app with no path-based routing); the manifest's `start_url`/`scope`/`id`/icon `src`s are relative (resolved against the manifest URL); the service worker is registered via `import.meta.env.BASE_URL` with its default scope (the directory containing `sw.js`); and the SW precache list and build-asset injection are scope-relative, resolved against the SW's registration scope at runtime. This was verified locally by serving `dist/` under a `/campuskit/` prefix (see the QA report addendum).
 5. After deployment, verify the live URL in a mobile browser, reload while offline, and test install/"Add to Home screen" before adding screenshots above.
 
 ## Privacy
@@ -67,7 +67,7 @@ Settings → Backup exports a versioned archive containing routine, attendance, 
 - **Voice recording fails:** it needs a secure context (HTTPS or localhost), microphone permission, and MediaRecorder support. The app shows the specific reason.
 - **App shows an old version:** a service-worker update prompt appears when a new worker is waiting; otherwise close/reopen the app, or clear site data (export a backup first).
 - **Data missing after a browser cleanup:** evicted browser storage cannot be recovered; restore from a backup export.
-- **Assets 404 on GitHub Pages:** the build base does not match the deployment path; see step 4 under Deployment.
+- **Assets 404 on GitHub Pages:** the build is base-relative (see step 4 under Deployment), so assets resolve under any deployment path; if assets still 404, check that Pages is serving the `dist/` artifact built by the workflow, not the repository root.
 
 ## Contributing
 

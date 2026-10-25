@@ -13,12 +13,11 @@ jobs:
         with: { node-version: 20, cache: npm }
       - run: npm ci
       - run: npm run lint        # tsc --noEmit (this project has no unit-test suite)
-      # Base: vite.config.ts sets no base (defaults to '/'). For a project site
-      # at /campuskit/ the bundle + index.html refs must be built with this base.
-      # NOTE: manifest start_url/scope/icons, the SW registration in
-      # src/hooks/usePWA.ts and the SW precache list in public/sw.js are still
-      # root-absolute in the source - see QA_REPORT.md "Fix needed" section.
-      - run: npx vite build --base=/campuskit/
+      # No --base flag needed: vite.config.ts sets base: './', so the bundle,
+      # index.html refs, manifest, service-worker registration and the SW
+      # precache list are all base-relative and work under the /campuskit/
+      # project-site subpath (and at a domain root). See QA_REPORT.md addendum.
+      - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist }

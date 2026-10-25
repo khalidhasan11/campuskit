@@ -19,7 +19,7 @@ function campusKitServiceWorkerPlugin(): Plugin {
       if (fs.existsSync(assetsDir)) {
         for (const file of fs.readdirSync(assetsDir)) {
           if (/\.(js|css|svg|png|woff2?)$/i.test(file)) {
-            builtAssetUrls.push(`/assets/${file}`);
+            builtAssetUrls.push(`./assets/${file}`);
           }
         }
       }
@@ -43,6 +43,10 @@ function campusKitServiceWorkerPlugin(): Plugin {
 
 export default defineConfig(() => {
   return {
+    // Base-relative build: this is a single-page app with no path-based routing,
+    // so './' makes built asset URLs resolve correctly at a domain root AND
+    // under any subpath (e.g. GitHub Pages project site /campuskit/).
+    base: './',
     plugins: [react(), tailwindcss(), campusKitServiceWorkerPlugin()],
     resolve: {
       alias: {

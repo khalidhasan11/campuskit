@@ -23,7 +23,7 @@ import { ExamsView } from './components/ExamsView';
 import { StudyView } from './components/StudyView';
 import { NotesView } from './components/NotesView';
 import { SettingsModal } from './components/SettingsModal';
-import { useOnlineStatus, usePWAInstall } from './hooks/usePWA';
+import { useOnlineStatus, usePWAInstall, useServiceWorkerStatus } from './hooks/usePWA';
 import type { TabId } from './types/campuskit';
 
 const NAV_TABS: Array<{ id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -46,6 +46,11 @@ const MainAppContent: React.FC = () => {
 
   const isOnline = useOnlineStatus();
   const { isInstallable, installApp } = usePWAInstall();
+  // Register the service worker (side effect). This hook was previously
+  // never called anywhere, so the SW never registered and offline/install
+  // could not work; wiring it here fixes that. Update state is not surfaced
+  // in the UI yet — sw.js calls skipWaiting() on install, so updates apply.
+  useServiceWorkerStatus();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (

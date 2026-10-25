@@ -103,7 +103,12 @@ export function useServiceWorkerStatus() {
 
     const registerSw = async () => {
       try {
-        const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        // Base-relative registration: import.meta.env.BASE_URL is './'
+        // (vite.config.ts base), so this registers '<app-directory>/sw.js'
+        // both at a domain root and under a subpath like /campuskit/.
+        // No explicit scope is passed: the default scope is the directory
+        // containing sw.js, which is exactly the app root in both cases.
+        const reg = await navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
         if (cancelled) return;
         setSwState('ready');
 
