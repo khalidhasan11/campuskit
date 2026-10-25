@@ -1,5 +1,7 @@
 # CampusKit
 
+**Live app: https://khalidhasan11.github.io/campuskit/** — open it in Chrome on Android and choose "Add to Home screen" to install.
+
 Free, offline-first student productivity PWA for university students in Bangladesh. No account, no subscription, no premium locks, no ads, no backend, and no AI API required for any core feature.
 
 > This repository contains the CampusKit build produced in Google AI Studio (app `d9c57795-f6db-4e7f-8c63-887a9d150bca`) and QA-checked locally on Oct 25, 2026. See `QA_REPORT.md` in the project archive for the full verification record, including known pre-publish fixes.
@@ -20,11 +22,11 @@ Exactly seven bottom tabs:
 
 ## Screenshots
 
-To be added after the first GitHub Pages deployment. No fabricated screenshots are included.
+To be added from the live deployment. No fabricated screenshots are included.
 
 ## Installation (users)
 
-Once deployed, open the GitHub Pages URL in Chrome on Android (or any modern browser) and choose "Add to Home screen" / Install. After the first successful load the app shell is cached and core features work offline.
+Open https://khalidhasan11.github.io/campuskit/ in Chrome on Android (or any modern browser) and choose "Add to Home screen" / Install. After the first successful load the app shell is cached and core features work offline.
 
 ## Local development
 
