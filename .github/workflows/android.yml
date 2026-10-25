@@ -43,6 +43,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Explicit package list: the action's defaults include the legacy
+          # 'tools' package, which no longer exists in the SDK repository
+          # and makes sdkmanager fail (seen in the first CI run).
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
 
       - name: Install dependencies (reproducible)
         run: npm ci
