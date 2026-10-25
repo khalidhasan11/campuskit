@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useCampusKit } from '../context/CampusKitContext';
 import { Modal } from './Modal';
+import { TranscriptCalculator } from './TranscriptCalculator';
 import {
   computeCompletedCgpa,
   computeProjectedCgpa,
@@ -263,6 +264,9 @@ export const CgpaView: React.FC = () => {
           </div>
         )}
       </section>
+
+      {/* Transcript CGPA Calculator (IUB style) */}
+      <TranscriptCalculator />
 
       {/* Completed Semesters Section */}
       <section className="space-y-3">
