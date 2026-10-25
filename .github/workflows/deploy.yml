@@ -1,0 +1,31 @@
+name: Deploy CampusKit to GitHub Pages
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: pages, cancel-in-progress: false }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run lint        # tsc --noEmit (this project has no unit-test suite)
+      # Base: vite.config.ts sets no base (defaults to '/'). For a project site
+      # at /campuskit/ the bundle + index.html refs must be built with this base.
+      # NOTE: manifest start_url/scope/icons, the SW registration in
+      # src/hooks/usePWA.ts and the SW precache list in public/sw.js are still
+      # root-absolute in the source - see QA_REPORT.md "Fix needed" section.
+      - run: npx vite build --base=/campuskit/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dist }
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: "${{ steps.deployment.outputs.page_url }}" }
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

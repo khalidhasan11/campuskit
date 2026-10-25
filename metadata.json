@@ -1,0 +1,10 @@
+{
+  "name": "CampusKit",
+  "description": "An offline, privacy-first productivity PWA for students to manage schedules, attendance, CGPA, and deadlines with zero friction.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
