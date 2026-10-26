@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import {
   Calendar,
   CalendarDays,
@@ -46,6 +47,36 @@ const MainAppContent: React.FC = () => {
 
   const isOnline = useOnlineStatus();
   const { isInstallable, installApp } = usePWAInstall();
+  // Android hardware back button (native shell only; no-op on the web):
+  // a non-Today tab goes back to Today, and back on Today exits the app.
+  // The listener is re-registered when the tab changes so it always sees
+  // the current tab; @capacitor/app is loaded lazily so the web bundle
+  // never loads native-only code.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let remove: (() => void) | undefined;
+    let cancelled = false;
+    import('@capacitor/app')
+      .then(async ({ App }) => {
+        if (cancelled) return;
+        const listener = await App.addListener('backButton', () => {
+          if (activeTab !== 'today') {
+            setActiveTab('today');
+          } else {
+            void App.exitApp();
+          }
+        });
+        remove = () => void listener.remove();
+      })
+      .catch(() => {
+        // Back-button handling is a convenience; a missing plugin must
+        // never break the app itself.
+      });
+    return () => {
+      cancelled = true;
+      remove?.();
+    };
+  }, [activeTab, setActiveTab]);
   // Register the service worker (side effect). This hook was previously
   // never called anywhere, so the SW never registered and offline/install
   // could not work; wiring it here fixes that. Update state is not surfaced
