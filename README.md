@@ -9,8 +9,8 @@ Free, offline-first student productivity PWA for university students in Banglade
 Prefer a real app instead of the browser? CampusKit is also published as an installable Android APK (built with Capacitor — the app is bundled inside the APK and works fully offline; it does not just open the website).
 
 - **All releases:** https://github.com/khalidhasan11/campuskit/releases
-- **Direct download (v1.0.0):** https://github.com/khalidhasan11/campuskit/releases/download/v1.0.0/CampusKit-v1.0.0-debug.apk
-- Package: `com.khalidhasan11.campuskit` · Version 1.0.0 (versionCode 1) · Size: 4,240,000 bytes · Requires Android 6.0 (API 23) or newer. The download page is public — no GitHub account needed.
+- **Direct download (v1.1.0):** https://github.com/khalidhasan11/campuskit/releases/download/v1.1.0/CampusKit-v1.1.0-debug.apk
+- Package: `com.khalidhasan11.campuskit` · Version 1.1.0 (versionCode 2) · Size: 4,581,327 bytes · Requires Android 6.0 (API 23) or newer. The download page is public — no GitHub account needed.
 
 **How to install**
 
@@ -19,12 +19,23 @@ Prefer a real app instead of the browser? CampusKit is also published as an inst
 3. Android will ask you to allow installation from that source (your browser or Files app) — allow it for this install. This prompt is normal for APKs installed outside the Play Store.
 4. Open CampusKit from your app drawer. No account, no sign-in, no internet needed.
 
+**Release notes — v1.1.0**
+
+- Courses catalog inside the Routine tab (name, code, credits, teacher, classroom) with an optional course picker on classes, and CSV timetable import with a preview (valid rows, rejected rows with reasons, overlap warnings — nothing silently dropped).
+- Semester settings: name, start/end dates, holidays (with a holiday badge on Today and a "Day X of Y" semester progress line).
+- Attendance: Late (counts as attended) and Excused (excluded from the percentage base) actions with counts on each subject card and undo for all four action types.
+- Configurable grading scale in Settings (default 4.00; 5.00 or a custom maximum from 2.00 to 10.00), used by the CGPA tab's validation and What-If impossibility check.
+- App-open-only reminders (class within 60 minutes, deadline due tomorrow, attendance-risk alerts) with the honest note that reminders cannot fire while the app is closed.
+- Today "Next class" line, microphone-purpose line in Notes, real CampusKit launcher icons/splash (replacing the Capacitor template art), and Android hardware back-button handling (non-Today tab → Today, Today → exit).
+- Reliability: a 93-test vitest suite (ported QA-harness math, CSV parser, grading scale, backup validation), backup file-size pre-check and manifest-count cross-check, confirm dialogs for semester/course/deadline/session deletes, and — new in v1.1.0 — the IUB Transcript CGPA Calculator is now included in backup export/restore and removed by clear-all.
+- Still free, no account, no backend, no ads, no premium tier. Permissions: microphone only (for voice notes); no internet permission.
+
 **Release notes — v1.0.0**
 
 - First Android release: all seven tabs (Today, Routine, Attend, CGPA, Exams, Study, Notes) with local data storage, IndexedDB note attachments (images, audio, voice recording), backup export/restore, themes, and full offline use.
 - Permissions: microphone only (for voice notes). The APK requests **no internet permission**.
 
-> **⚠️ Debug signing — please read.** The v1.0.0 APK is a **debug-signed build for testing**, because production signing secrets are not configured on this repository yet. It installs and runs normally, but Android may show an extra warning, and when a differently-signed production build is released later you will need to **uninstall this build before installing the new one** (switching signatures cannot update in place). **Back up first:** Settings → Export backup, so your data can be restored after reinstalling. Always keep a recent backup of your CampusKit data.
+> **⚠️ Debug signing — please read.** The v1.1.0 APK is a **debug-signed build for testing**, because production signing secrets are not configured on this repository yet. It installs and runs normally, but Android may show an extra warning, and when a differently-signed production build is released later you will need to **uninstall this build before installing the new one** (switching signatures cannot update in place). **Back up first:** Settings → Export backup, so your data can be restored after reinstalling. Always keep a recent backup of your CampusKit data.
 
 ### For production signed releases
 
