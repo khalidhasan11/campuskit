@@ -4,11 +4,30 @@ export type ThemePreference = 'light' | 'dark' | 'system';
 export type ClockFormat = '12h' | '24h';
 export type WeekStart = 'saturday' | 'sunday' | 'monday';
 
+export interface ReminderSettings {
+  classReminders: boolean; // within 60 mins
+  deadlineReminders: boolean; // due tomorrow
+  attendanceRiskReminders: boolean; // below required %
+}
+
 export interface AppSettings {
   theme: ThemePreference;
   clockFormat: ClockFormat;
   weekStart: WeekStart;
   soundEnabled: boolean;
+  gradingScaleMax: number; // default 4.00, allows 4.00, 5.00, or custom 2.00 to 10.00
+  reminders: ReminderSettings;
+}
+
+export interface RoutineCourse {
+  id: string;
+  name: string;
+  courseCode: string;
+  credits: number;
+  teacher: string;
+  classroom: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface RoutineClass {
@@ -18,6 +37,7 @@ export interface RoutineClass {
   startTime: string; // HH:MM (24h local)
   endTime: string; // HH:MM (24h local)
   room: string;
+  courseId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -28,15 +48,43 @@ export interface AttendanceSubject {
   requiredPercentage: number; // > 0 and <= 100, default 80
   total: number; // integer >= 0
   attended: number; // integer >= 0, <= total
+  lateCount?: number; // integer >= 0, counts as attended
+  excusedCount?: number; // integer >= 0, excluded from total & attended
   createdAt: number;
   updatedAt: number;
+}
+
+export type AttendanceActionType = 'present' | 'absent' | 'late' | 'excused';
+
+export interface AttendanceUndoState {
+  subjectId: string;
+  subjectName: string;
+  actionLabel: 'Present' | 'Absent' | 'Late' | 'Excused';
+  prevAttended: number;
+  prevTotal: number;
+  prevLateCount: number;
+  prevExcusedCount: number;
+  timestamp: number;
+}
+
+export interface SemesterHoliday {
+  id: string;
+  date: string; // YYYY-MM-DD
+  label: string;
+}
+
+export interface SemesterSettings {
+  semesterName: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  holidays: SemesterHoliday[];
 }
 
 export interface CompletedSemester {
   id: string;
   name: string;
   credits: number; // > 0
-  gpa: number; // 0.00 to 4.00
+  gpa: number; // 0.00 to gradingScaleMax
   createdAt: number;
   updatedAt: number;
 }
@@ -45,7 +93,7 @@ export interface CurrentCourse {
   id: string;
   name: string;
   credits: number; // > 0
-  expectedGradePoints: number; // 0.00 to 4.00
+  expectedGradePoints: number; // 0.00 to gradingScaleMax
   createdAt: number;
   updatedAt: number;
 }
@@ -128,6 +176,8 @@ export interface BackupManifest {
     studySessions: number;
     notes: number;
     attachments: number;
+    routineCourses?: number;
+    holidays?: number;
   };
 }
 
@@ -143,5 +193,7 @@ export interface BackupArchive {
     studySessions: StudySession[];
     notes: NoteItem[];
     attachments: SerializedBackupAttachment[];
+    routineCourses?: RoutineCourse[];
+    semesterSettings?: SemesterSettings;
   };
 }

@@ -11,7 +11,11 @@ import type {
   NoteAttachmentMeta,
   NoteItem,
   PersistedTimerState,
+  ReminderSettings,
   RoutineClass,
+  RoutineCourse,
+  SemesterHoliday,
+  SemesterSettings,
   SerializedBackupAttachment,
   StoredAttachmentBlob,
   StudyPresetId,
@@ -38,6 +42,9 @@ export const STORAGE_KEYS = {
   studyTimer: 'campuskit_v1_study_timer',
   notes: 'campuskit_v1_notes',
   pendingCleanupIds: 'campuskit_v1_pending_cleanup_ids',
+  routineCourses: 'campuskit_v1_routine_courses',
+  semesterSettings: 'campuskit_v1_semester_settings',
+  remindersSent: 'campuskit_v1_reminders_sent',
 } as const;
 
 export const MAX_BACKUP_FILE_BYTES = 80 * 1024 * 1024;
@@ -47,6 +54,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   clockFormat: '12h',
   weekStart: 'sunday',
   soundEnabled: true,
+  gradingScaleMax: 4.0,
+  reminders: {
+    classReminders: false,
+    deadlineReminders: false,
+    attendanceRiskReminders: false,
+  },
+};
+
+export const DEFAULT_SEMESTER_SETTINGS: SemesterSettings = {
+  semesterName: '',
+  startDate: '',
+  endDate: '',
+  holidays: [],
 };
 
 export function createId(): string {
@@ -96,7 +116,87 @@ export function validateSettings(raw: unknown): AppSettings {
   const soundEnabled =
     typeof raw.soundEnabled === 'boolean' ? raw.soundEnabled : DEFAULT_SETTINGS.soundEnabled;
 
-  return { theme, clockFormat, weekStart, soundEnabled };
+  const gradingScaleMax =
+    typeof raw.gradingScaleMax === 'number' &&
+    Number.isFinite(raw.gradingScaleMax) &&
+    raw.gradingScaleMax >= 2.0 &&
+    raw.gradingScaleMax <= 10.0
+      ? Math.round(raw.gradingScaleMax * 100) / 100
+      : DEFAULT_SETTINGS.gradingScaleMax;
+
+  const rawRem = isObject(raw.reminders) ? raw.reminders : {};
+  const reminders: ReminderSettings = {
+    classReminders: typeof rawRem.classReminders === 'boolean' ? rawRem.classReminders : false,
+    deadlineReminders:
+      typeof rawRem.deadlineReminders === 'boolean' ? rawRem.deadlineReminders : false,
+    attendanceRiskReminders:
+      typeof rawRem.attendanceRiskReminders === 'boolean' ? rawRem.attendanceRiskReminders : false,
+  };
+
+  return { theme, clockFormat, weekStart, soundEnabled, gradingScaleMax, reminders };
+}
+
+export function validateSemesterSettings(raw: unknown): SemesterSettings {
+  if (!isObject(raw)) return { ...DEFAULT_SEMESTER_SETTINGS };
+  const semesterName =
+    typeof raw.semesterName === 'string' ? raw.semesterName.trim().slice(0, 120) : '';
+  const startDate =
+    typeof raw.startDate === 'string' && parseLocalDateParts(raw.startDate)
+      ? raw.startDate.trim()
+      : '';
+  const endDate =
+    typeof raw.endDate === 'string' && parseLocalDateParts(raw.endDate) ? raw.endDate.trim() : '';
+
+  const holidays: SemesterHoliday[] = [];
+  if (Array.isArray(raw.holidays)) {
+    const seenIds = new Set<string>();
+    for (const h of raw.holidays) {
+      if (
+        isObject(h) &&
+        typeof h.date === 'string' &&
+        parseLocalDateParts(h.date) &&
+        typeof h.label === 'string' &&
+        h.label.trim().length > 0
+      ) {
+        const id = isNonEmptyString(h.id, 120) ? h.id.trim() : createId();
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          holidays.push({
+            id,
+            date: h.date.trim(),
+            label: h.label.trim().slice(0, 150),
+          });
+        }
+      }
+    }
+  }
+
+  return { semesterName, startDate, endDate, holidays };
+}
+
+export function validateRoutineCourse(raw: unknown): RoutineCourse | null {
+  if (!isObject(raw)) return null;
+  if (!isNonEmptyString(raw.id, 120) || !isNonEmptyString(raw.name, 200)) return null;
+  const courseCode = typeof raw.courseCode === 'string' ? raw.courseCode.trim().slice(0, 60) : '';
+  const credits =
+    typeof raw.credits === 'number' && Number.isFinite(raw.credits) && raw.credits > 0
+      ? raw.credits
+      : 3;
+  const teacher = typeof raw.teacher === 'string' ? raw.teacher.trim().slice(0, 120) : '';
+  const classroom = typeof raw.classroom === 'string' ? raw.classroom.trim().slice(0, 120) : '';
+  const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
+  const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
+
+  return {
+    id: raw.id.trim(),
+    name: raw.name.trim(),
+    courseCode,
+    credits,
+    teacher,
+    classroom,
+    createdAt,
+    updatedAt,
+  };
 }
 
 export function validateRoutineClass(raw: unknown): RoutineClass | null {
@@ -115,6 +215,7 @@ export function validateRoutineClass(raw: unknown): RoutineClass | null {
   const endM = parseMinutesFromMidnight(raw.endTime);
   if (startM === null || endM === null || endM <= startM) return null;
   const room = typeof raw.room === 'string' ? raw.room.slice(0, 120) : '';
+  const courseId = isNonEmptyString(raw.courseId, 120) ? raw.courseId.trim() : undefined;
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
 
@@ -125,6 +226,7 @@ export function validateRoutineClass(raw: unknown): RoutineClass | null {
     startTime: raw.startTime.trim(),
     endTime: raw.endTime.trim(),
     room: room.trim(),
+    courseId,
     createdAt,
     updatedAt,
   };
@@ -152,6 +254,14 @@ export function validateAttendanceSubject(raw: unknown): AttendanceSubject | nul
   ) {
     return null;
   }
+  const lateCount =
+    typeof raw.lateCount === 'number' && Number.isInteger(raw.lateCount) && raw.lateCount >= 0
+      ? raw.lateCount
+      : 0;
+  const excusedCount =
+    typeof raw.excusedCount === 'number' && Number.isInteger(raw.excusedCount) && raw.excusedCount >= 0
+      ? raw.excusedCount
+      : 0;
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
 
@@ -161,6 +271,8 @@ export function validateAttendanceSubject(raw: unknown): AttendanceSubject | nul
     requiredPercentage: Math.round(raw.requiredPercentage * 100) / 100,
     total: raw.total,
     attended: raw.attended,
+    lateCount,
+    excusedCount,
     createdAt,
     updatedAt,
   };
@@ -181,7 +293,7 @@ export function validateCompletedSemester(raw: unknown): CompletedSemester | nul
     typeof raw.gpa !== 'number' ||
     !Number.isFinite(raw.gpa) ||
     raw.gpa < 0 ||
-    raw.gpa > 4
+    raw.gpa > 10.0
   ) {
     return null;
   }
@@ -191,8 +303,8 @@ export function validateCompletedSemester(raw: unknown): CompletedSemester | nul
   return {
     id: raw.id.trim(),
     name: raw.name.trim(),
-    credits: raw.credits,
-    gpa: raw.gpa,
+    credits: Math.round(raw.credits * 100) / 100,
+    gpa: Math.round(raw.gpa * 100) / 100,
     createdAt,
     updatedAt,
   };
@@ -213,7 +325,7 @@ export function validateCurrentCourse(raw: unknown): CurrentCourse | null {
     typeof raw.expectedGradePoints !== 'number' ||
     !Number.isFinite(raw.expectedGradePoints) ||
     raw.expectedGradePoints < 0 ||
-    raw.expectedGradePoints > 4
+    raw.expectedGradePoints > 10.0
   ) {
     return null;
   }
@@ -223,8 +335,8 @@ export function validateCurrentCourse(raw: unknown): CurrentCourse | null {
   return {
     id: raw.id.trim(),
     name: raw.name.trim(),
-    credits: raw.credits,
-    expectedGradePoints: raw.expectedGradePoints,
+    credits: Math.round(raw.credits * 100) / 100,
+    expectedGradePoints: Math.round(raw.expectedGradePoints * 100) / 100,
     createdAt,
     updatedAt,
   };
@@ -233,19 +345,19 @@ export function validateCurrentCourse(raw: unknown): CurrentCourse | null {
 export function validateDeadlineItem(raw: unknown): DeadlineItem | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id, 120) || !isNonEmptyString(raw.title, 250)) return null;
-  const type = raw.type as DeadlineType;
-  if (type !== 'Exam' && type !== 'Assignment' && type !== 'Quiz') return null;
+  const validTypes: DeadlineType[] = ['Exam', 'Assignment', 'Quiz'];
+  if (!validTypes.includes(raw.type as DeadlineType)) return null;
   if (typeof raw.dueDate !== 'string' || !parseLocalDateParts(raw.dueDate)) return null;
-  if (typeof raw.completed !== 'boolean') return null;
+  const completed = typeof raw.completed === 'boolean' ? raw.completed : false;
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
 
   return {
     id: raw.id.trim(),
     title: raw.title.trim(),
-    type,
+    type: raw.type as DeadlineType,
     dueDate: raw.dueDate.trim(),
-    completed: raw.completed,
+    completed,
     createdAt,
     updatedAt,
   };
@@ -263,8 +375,8 @@ export function validateStudySession(raw: unknown): StudySession | null {
   ) {
     return null;
   }
-  const source = raw.source === 'timer' || raw.source === 'manual' ? raw.source : 'manual';
-  const label = typeof raw.label === 'string' ? raw.label.slice(0, 200) : 'Focus session';
+  const source: 'timer' | 'manual' = raw.source === 'timer' ? 'timer' : 'manual';
+  const label = typeof raw.label === 'string' ? raw.label.trim().slice(0, 120) : '';
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
 
@@ -273,7 +385,7 @@ export function validateStudySession(raw: unknown): StudySession | null {
     date: raw.date.trim(),
     minutes: raw.minutes,
     source,
-    label: label.trim() || 'Focus session',
+    label: label || (source === 'timer' ? 'Focus Session' : 'Study Log'),
     createdAt,
     updatedAt,
   };
@@ -282,29 +394,33 @@ export function validateStudySession(raw: unknown): StudySession | null {
 export function validateAttachmentMeta(raw: unknown): NoteAttachmentMeta | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id, 120) || !isNonEmptyString(raw.noteId, 120)) return null;
-  const kind = raw.kind as AttachmentKind;
-  if (kind !== 'image' && kind !== 'audio' && kind !== 'voice') return null;
-  if (!isNonEmptyString(raw.filename, 300) || !isNonEmptyString(raw.mimeType, 120)) return null;
+  const validKinds: AttachmentKind[] = ['image', 'audio', 'voice'];
+  if (!validKinds.includes(raw.kind as AttachmentKind)) return null;
+  if (!isNonEmptyString(raw.filename, 200)) return null;
+  const mimeType = isNonEmptyString(raw.mimeType, 120)
+    ? raw.mimeType.trim()
+    : 'application/octet-stream';
   if (
     typeof raw.sizeBytes !== 'number' ||
     !Number.isFinite(raw.sizeBytes) ||
-    raw.sizeBytes < 0
+    raw.sizeBytes < 0 ||
+    raw.sizeBytes > 50 * 1024 * 1024
   ) {
     return null;
   }
   const durationSec =
     typeof raw.durationSec === 'number' && Number.isFinite(raw.durationSec) && raw.durationSec >= 0
-      ? raw.durationSec
+      ? Math.round(raw.durationSec)
       : null;
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
 
   return {
     id: raw.id.trim(),
     noteId: raw.noteId.trim(),
-    kind,
+    kind: raw.kind as AttachmentKind,
     filename: raw.filename.trim(),
-    mimeType: raw.mimeType.trim(),
-    sizeBytes: Math.round(raw.sizeBytes),
+    mimeType,
+    sizeBytes: raw.sizeBytes,
     durationSec,
     createdAt,
   };
@@ -313,15 +429,16 @@ export function validateAttachmentMeta(raw: unknown): NoteAttachmentMeta | null 
 export function validateNoteItem(raw: unknown): NoteItem | null {
   if (!isObject(raw)) return null;
   if (!isNonEmptyString(raw.id, 120)) return null;
-  if (typeof raw.title !== 'string' || raw.title.length > 500) return null;
-  if (typeof raw.body !== 'string' || raw.body.length > 500_000) return null;
-  if (!Array.isArray(raw.attachments)) return null;
   const noteId = raw.id.trim();
+  if (typeof raw.title !== 'string' || typeof raw.body !== 'string') return null;
   const attachments: NoteAttachmentMeta[] = [];
-  for (const attRaw of raw.attachments) {
-    const validated = validateAttachmentMeta(attRaw);
-    if (!validated || validated.noteId !== noteId) return null;
-    attachments.push(validated);
+  if (Array.isArray(raw.attachments)) {
+    for (const att of raw.attachments) {
+      const valid = validateAttachmentMeta(att);
+      if (valid && valid.noteId === noteId) {
+        attachments.push(valid);
+      }
+    }
   }
   const createdAt = isValidTimestamp(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = isValidTimestamp(raw.updatedAt) ? raw.updatedAt : createdAt;
@@ -413,6 +530,8 @@ export function writeStorageJson(key: string, value: unknown): void {
 export interface LocalSnapshot {
   settings: AppSettings;
   routine: RoutineClass[];
+  routineCourses: RoutineCourse[];
+  semesterSettings: SemesterSettings;
   attendance: AttendanceSubject[];
   semesters: CompletedSemester[];
   courses: CurrentCourse[];
@@ -430,6 +549,14 @@ export function loadInitialSnapshot(): LocalSnapshot {
     if (rawSettings) settings = validateSettings(JSON.parse(rawSettings));
   } catch {
     settings = { ...DEFAULT_SETTINGS };
+  }
+
+  let semesterSettings = { ...DEFAULT_SEMESTER_SETTINGS };
+  try {
+    const rawSem = localStorage.getItem(STORAGE_KEYS.semesterSettings);
+    if (rawSem) semesterSettings = validateSemesterSettings(JSON.parse(rawSem));
+  } catch {
+    semesterSettings = { ...DEFAULT_SEMESTER_SETTINGS };
   }
 
   let studyTimer = { ...DEFAULT_TIMER_STATE };
@@ -456,6 +583,8 @@ export function loadInitialSnapshot(): LocalSnapshot {
   return {
     settings,
     routine: readJsonList(STORAGE_KEYS.routine, validateRoutineClass),
+    routineCourses: readJsonList(STORAGE_KEYS.routineCourses, validateRoutineCourse),
+    semesterSettings,
     attendance: readJsonList(STORAGE_KEYS.attendance, validateAttendanceSubject),
     semesters: readJsonList(STORAGE_KEYS.semesters, validateCompletedSemester),
     courses: readJsonList(STORAGE_KEYS.courses, validateCurrentCourse),
@@ -503,22 +632,26 @@ export async function buildBackupArchive(snapshot: LocalSnapshot): Promise<Backu
     });
   }
 
-  return {
-    manifest: {
-      app: 'CampusKit',
-      schemaVersion: 1,
-      exportedAt: new Date().toISOString(),
-      counts: {
-        routine: snapshot.routine.length,
-        attendance: snapshot.attendance.length,
-        semesters: snapshot.semesters.length,
-        courses: snapshot.courses.length,
-        deadlines: snapshot.deadlines.length,
-        studySessions: snapshot.studySessions.length,
-        notes: snapshot.notes.length,
-        attachments: serializedAttachments.length,
-      },
+  const manifest: BackupArchive['manifest'] = {
+    app: 'CampusKit',
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    counts: {
+      routine: snapshot.routine.length,
+      attendance: snapshot.attendance.length,
+      semesters: snapshot.semesters.length,
+      courses: snapshot.courses.length,
+      deadlines: snapshot.deadlines.length,
+      studySessions: snapshot.studySessions.length,
+      notes: snapshot.notes.length,
+      attachments: serializedAttachments.length,
+      routineCourses: snapshot.routineCourses.length,
+      holidays: snapshot.semesterSettings.holidays.length,
     },
+  };
+
+  return {
+    manifest,
     data: {
       settings: snapshot.settings,
       routine: snapshot.routine,
@@ -529,6 +662,8 @@ export async function buildBackupArchive(snapshot: LocalSnapshot): Promise<Backu
       studySessions: snapshot.studySessions,
       notes: snapshot.notes,
       attachments: serializedAttachments,
+      routineCourses: snapshot.routineCourses,
+      semesterSettings: snapshot.semesterSettings,
     },
   };
 }
@@ -537,6 +672,8 @@ export interface ValidatedBackupPayload {
   manifest: BackupArchive['manifest'];
   settings: AppSettings;
   routine: RoutineClass[];
+  routineCourses: RoutineCourse[];
+  semesterSettings: SemesterSettings;
   attendance: AttendanceSubject[];
   semesters: CompletedSemester[];
   courses: CurrentCourse[];
@@ -615,6 +752,14 @@ export function parseAndValidateBackupJson(jsonText: string): ValidatedBackupPay
   );
   const notes = validateStrictArray(d.notes, 'notes', validateNoteItem);
 
+  const routineCourses = Array.isArray(d.routineCourses)
+    ? validateStrictArray(d.routineCourses, 'routineCourses', validateRoutineCourse)
+    : [];
+
+  const semesterSettings = isObject(d.semesterSettings)
+    ? validateSemesterSettings(d.semesterSettings)
+    : { ...DEFAULT_SEMESTER_SETTINGS };
+
   if (!Array.isArray(d.attachments)) {
     throw new Error('Invalid backup format: "attachments" must be an array.');
   }
@@ -666,6 +811,8 @@ export function parseAndValidateBackupJson(jsonText: string): ValidatedBackupPay
     manifest: parsed.manifest as unknown as BackupArchive['manifest'],
     settings,
     routine,
+    routineCourses,
+    semesterSettings,
     attendance,
     semesters,
     courses,
@@ -735,6 +882,8 @@ export async function executeValidatedRestore(
     nextSnapshot = {
       settings: payload.settings,
       routine: payload.routine,
+      routineCourses: payload.routineCourses,
+      semesterSettings: payload.semesterSettings,
       attendance: payload.attendance,
       semesters: payload.semesters,
       courses: payload.courses,
@@ -750,6 +899,11 @@ export async function executeValidatedRestore(
       current.routine,
       payload.routine,
       (r) => `${r.subject.toLowerCase()}|${r.dayOfWeek}|${r.startTime}|${r.endTime}`
+    );
+    const mergedRoutineCourses = mergeDedupe(
+      current.routineCourses,
+      payload.routineCourses,
+      (c) => `${c.name.toLowerCase()}|${c.courseCode.toLowerCase()}`
     );
     const mergedAttendance = mergeDedupe(
       current.attendance,
@@ -776,6 +930,18 @@ export async function executeValidatedRestore(
       payload.studySessions,
       (s) => `${s.date}|${s.minutes}|${s.source}|${s.createdAt}`
     );
+
+    // Merge semester holidays
+    const holidayMap = new Map<string, SemesterHoliday>();
+    for (const h of current.semesterSettings.holidays) holidayMap.set(h.id, h);
+    for (const h of payload.semesterSettings.holidays) holidayMap.set(h.id, h);
+
+    const mergedSemesterSettings: SemesterSettings = {
+      semesterName: payload.semesterSettings.semesterName || current.semesterSettings.semesterName,
+      startDate: payload.semesterSettings.startDate || current.semesterSettings.startDate,
+      endDate: payload.semesterSettings.endDate || current.semesterSettings.endDate,
+      holidays: Array.from(holidayMap.values()),
+    };
 
     const noteMap = new Map<string, NoteItem>();
     for (const n of current.notes) noteMap.set(n.id, n);
@@ -804,6 +970,8 @@ export async function executeValidatedRestore(
     nextSnapshot = {
       settings: current.settings,
       routine: mergedRoutine,
+      routineCourses: mergedRoutineCourses,
+      semesterSettings: mergedSemesterSettings,
       attendance: mergedAttendance,
       semesters: mergedSemesters,
       courses: mergedCourses,
@@ -820,6 +988,8 @@ export async function executeValidatedRestore(
     await replaceAllAttachmentBlobs(nextBlobs);
     writeStorageJson(STORAGE_KEYS.settings, nextSnapshot.settings);
     writeStorageJson(STORAGE_KEYS.routine, nextSnapshot.routine);
+    writeStorageJson(STORAGE_KEYS.routineCourses, nextSnapshot.routineCourses);
+    writeStorageJson(STORAGE_KEYS.semesterSettings, nextSnapshot.semesterSettings);
     writeStorageJson(STORAGE_KEYS.attendance, nextSnapshot.attendance);
     writeStorageJson(STORAGE_KEYS.semesters, nextSnapshot.semesters);
     writeStorageJson(STORAGE_KEYS.courses, nextSnapshot.courses);

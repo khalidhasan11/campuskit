@@ -3,9 +3,11 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Clock,
   Pencil,
   Plus,
   RotateCcw,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   X,
@@ -41,6 +43,8 @@ export const AttendView: React.FC = () => {
 
   const [corrTotal, setCorrTotal] = useState(0);
   const [corrAttended, setCorrAttended] = useState(0);
+  const [corrLate, setCorrLate] = useState(0);
+  const [corrExcused, setCorrExcused] = useState(0);
   const [corrError, setCorrError] = useState<string | null>(null);
 
   const openAddModal = () => {
@@ -67,6 +71,8 @@ export const AttendView: React.FC = () => {
     setCorrectingSubject(subj);
     setCorrTotal(subj.total);
     setCorrAttended(subj.attended);
+    setCorrLate(subj.lateCount ?? 0);
+    setCorrExcused(subj.excusedCount ?? 0);
     setCorrError(null);
   };
 
@@ -112,6 +118,8 @@ export const AttendView: React.FC = () => {
       requiredPercentage: reqNum,
       total: totNum,
       attended: attNum,
+      lateCount: editingSubject?.lateCount ?? 0,
+      excusedCount: editingSubject?.excusedCount ?? 0,
     });
     setIsFormOpen(false);
   };
@@ -137,6 +145,8 @@ export const AttendView: React.FC = () => {
       requiredPercentage: correctingSubject.requiredPercentage,
       total: corrTotal,
       attended: corrAttended,
+      lateCount: Math.max(0, corrLate),
+      excusedCount: Math.max(0, corrExcused),
     });
     setCorrectingSubject(null);
   };
@@ -234,6 +244,10 @@ export const AttendView: React.FC = () => {
                         Attended {subj.attended} / {subj.total}
                       </span>
                       <span aria-hidden="true">·</span>
+                      <span>Late: {subj.lateCount ?? 0}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>Excused: {subj.excusedCount ?? 0}</span>
+                      <span aria-hidden="true">·</span>
                       <span>Required {subj.requiredPercentage}%</span>
                       {m.status !== 'NoData' && (
                         <>
@@ -317,26 +331,44 @@ export const AttendView: React.FC = () => {
                 </div>
 
                 <div className="pt-2 border-t border-stone-100 dark:border-stone-800/80 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 flex-1 min-w-[260px]">
                     <button
                       type="button"
                       onClick={() => markAttendance(subj.id, 'present')}
-                      className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                      className="min-h-[44px] px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white text-xs font-semibold inline-flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap"
                     >
-                      <Check className="w-4 h-4 shrink-0" />
+                      <Check className="w-3.5 h-3.5 shrink-0" />
                       <span>Present</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => markAttendance(subj.id, 'absent')}
-                      className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 active:scale-[0.99] text-stone-800 dark:text-stone-100 text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                      onClick={() => markAttendance(subj.id, 'late')}
+                      title="Late: counts as attended (+1 attended, +1 total)"
+                      className="min-h-[44px] px-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-white text-xs font-semibold inline-flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap"
                     >
-                      <X className="w-4 h-4 shrink-0" />
+                      <Clock className="w-3.5 h-3.5 shrink-0" />
+                      <span>Late</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => markAttendance(subj.id, 'absent')}
+                      className="min-h-[44px] px-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700 active:scale-[0.99] text-stone-800 dark:text-stone-100 text-xs font-semibold inline-flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap"
+                    >
+                      <X className="w-3.5 h-3.5 shrink-0" />
                       <span>Absent</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => markAttendance(subj.id, 'excused')}
+                      title="Excused: leaves attended & total unchanged (excluded from % base)"
+                      className="min-h-[44px] px-2.5 rounded-xl bg-sky-100 hover:bg-sky-200 dark:bg-sky-950/60 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-200 active:scale-[0.99] text-xs font-semibold inline-flex items-center justify-center gap-1 transition-all cursor-pointer whitespace-nowrap"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                      <span>Excused</span>
                     </button>
                   </div>
 
-                  <div className="flex items-center -mr-1.5">
+                  <div className="flex items-center -mr-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => openCorrectionModal(subj)}
@@ -378,7 +410,7 @@ export const AttendView: React.FC = () => {
       >
         <div className="space-y-3">
           <p className="text-xs text-stone-500 dark:text-stone-400">
-            Tap Present or Absent for any class held today:
+            Tap Present, Late, Absent, or Excused for any class held today:
           </p>
           <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {attendance.map((subj) => (
@@ -391,23 +423,37 @@ export const AttendView: React.FC = () => {
                     {subj.name}
                   </p>
                   <p className="text-xs text-stone-500 dark:text-stone-400 tabular-nums">
-                    {subj.attended}/{subj.total} attended
+                    {subj.attended}/{subj.total} attended · Late: {subj.lateCount ?? 0} · Excused: {subj.excusedCount ?? 0}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => markAttendance(subj.id, 'present')}
-                    className="min-h-[44px] px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold whitespace-nowrap"
+                    className="min-h-[44px] px-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold whitespace-nowrap"
                   >
                     Present
                   </button>
                   <button
                     type="button"
+                    onClick={() => markAttendance(subj.id, 'late')}
+                    className="min-h-[44px] px-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold whitespace-nowrap"
+                  >
+                    Late
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => markAttendance(subj.id, 'absent')}
-                    className="min-h-[44px] px-3.5 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 text-xs font-semibold whitespace-nowrap"
+                    className="min-h-[44px] px-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 text-xs font-semibold whitespace-nowrap"
                   >
                     Absent
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => markAttendance(subj.id, 'excused')}
+                    className="min-h-[44px] px-2.5 rounded-xl bg-sky-100 dark:bg-sky-950/60 hover:bg-sky-200 dark:hover:bg-sky-900 text-sky-800 dark:text-sky-200 text-xs font-semibold whitespace-nowrap"
+                  >
+                    Excused
                   </button>
                 </div>
               </li>
@@ -656,6 +702,90 @@ export const AttendView: React.FC = () => {
                       setCorrError(null);
                     }}
                     aria-label="Increase attended"
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 font-bold text-base"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800">
+                <div>
+                  <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
+                    Late Count
+                  </p>
+                  <p className="text-[11px] text-stone-500">Already included in Attended</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCorrLate(Math.max(0, corrLate - 1));
+                    }}
+                    aria-label="Decrease late count"
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 font-bold text-base"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    aria-label="Late count"
+                    value={corrLate}
+                    onChange={(e) => {
+                      setCorrLate(Math.max(0, Math.trunc(Number(e.target.value) || 0)));
+                    }}
+                    className="w-16 min-h-[44px] text-center rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 text-sm font-semibold tabular-nums"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCorrLate(corrLate + 1);
+                    }}
+                    aria-label="Increase late count"
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 font-bold text-base"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800">
+                <div>
+                  <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
+                    Excused Count
+                  </p>
+                  <p className="text-[11px] text-stone-500">Excluded from % base</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCorrExcused(Math.max(0, corrExcused - 1));
+                    }}
+                    aria-label="Decrease excused count"
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 font-bold text-base"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    aria-label="Excused count"
+                    value={corrExcused}
+                    onChange={(e) => {
+                      setCorrExcused(Math.max(0, Math.trunc(Number(e.target.value) || 0)));
+                    }}
+                    className="w-16 min-h-[44px] text-center rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 text-sm font-semibold tabular-nums"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCorrExcused(corrExcused + 1);
+                    }}
+                    aria-label="Increase excused count"
                     className="min-h-[44px] min-w-[44px] rounded-xl bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 font-bold text-base"
                   >
                     +

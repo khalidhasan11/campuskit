@@ -4,6 +4,8 @@ import type {
   CompletedSemester,
   CurrentCourse,
   RoutineClass,
+  SemesterHoliday,
+  SemesterSettings,
   StudySession,
   WeekStart,
 } from '../types/campuskit';
@@ -288,7 +290,10 @@ export function computeAttendanceMetrics(subject: Pick<
   };
 }
 
-export function computeCompletedCgpa(semesters: CompletedSemester[]): {
+export function computeCompletedCgpa(
+  semesters: CompletedSemester[],
+  maxScale: number = 4.0
+): {
   totalCredits: number;
   totalQualityPoints: number;
   cgpa: number | null;
@@ -296,7 +301,7 @@ export function computeCompletedCgpa(semesters: CompletedSemester[]): {
   let totalCredits = 0;
   let totalQualityPoints = 0;
   for (const sem of semesters) {
-    if (sem.credits > 0 && sem.gpa >= 0 && sem.gpa <= 4) {
+    if (sem.credits > 0 && sem.gpa >= 0 && sem.gpa <= maxScale + 1e-9) {
       totalCredits += sem.credits;
       totalQualityPoints += sem.credits * sem.gpa;
     }
@@ -313,7 +318,8 @@ export function computeCompletedCgpa(semesters: CompletedSemester[]): {
 
 export function computeProjectedCgpa(
   semesters: CompletedSemester[],
-  courses: CurrentCourse[]
+  courses: CurrentCourse[],
+  maxScale: number = 4.0
 ): {
   currentCredits: number;
   currentQualityPoints: number;
@@ -321,11 +327,11 @@ export function computeProjectedCgpa(
   combinedCredits: number;
   projectedCumulativeCgpa: number | null;
 } {
-  const completed = computeCompletedCgpa(semesters);
+  const completed = computeCompletedCgpa(semesters, maxScale);
   let currentCredits = 0;
   let currentQualityPoints = 0;
   for (const c of courses) {
-    if (c.credits > 0 && c.expectedGradePoints >= 0 && c.expectedGradePoints <= 4) {
+    if (c.credits > 0 && c.expectedGradePoints >= 0 && c.expectedGradePoints <= maxScale + 1e-9) {
       currentCredits += c.credits;
       currentQualityPoints += c.credits * c.expectedGradePoints;
     }
@@ -381,7 +387,8 @@ export function computeWhatIfGpa(
   rawCurrentCgpa: string,
   rawCompletedCredits: string,
   rawTargetCgpa: string,
-  rawRemainingCredits: string
+  rawRemainingCredits: string,
+  maxScale: number = 4.0
 ): WhatIfResult {
   const curStr = rawCurrentCgpa.trim();
   const compStr = rawCompletedCredits.trim();
@@ -413,12 +420,18 @@ export function computeWhatIfGpa(
     return { kind: 'error', message: 'Credits cannot be negative.' };
   }
 
-  if (currentCgpa < 0 || currentCgpa > 4) {
-    return { kind: 'error', message: 'Current cumulative CGPA must be between 0.00 and 4.00.' };
+  if (currentCgpa < 0 || currentCgpa > maxScale + 1e-9) {
+    return {
+      kind: 'error',
+      message: `Current cumulative CGPA must be between 0.00 and ${maxScale.toFixed(2)}.`,
+    };
   }
 
-  if (targetCgpa < 0 || targetCgpa > 4) {
-    return { kind: 'error', message: 'Target CGPA must be between 0.00 and 4.00.' };
+  if (targetCgpa < 0 || targetCgpa > maxScale + 1e-9) {
+    return {
+      kind: 'error',
+      message: `Target CGPA must be between 0.00 and ${maxScale.toFixed(2)}.`,
+    };
   }
 
   if (completedCredits === 0 && currentCgpa > 0) {
@@ -462,18 +475,19 @@ export function computeWhatIfGpa(
     };
   }
 
-  if (requiredGpa > 4.0 + 1e-9) {
-    const maxPossibleCgpa = (currentCgpa * completedCredits + 4.0 * remainingCredits) / totalCredits;
+  if (requiredGpa > maxScale + 1e-9) {
+    const maxPossibleCgpa =
+      (currentCgpa * completedCredits + maxScale * remainingCredits) / totalCredits;
     return {
       kind: 'impossible',
       requiredGpa,
       maxPossibleCgpa,
       remainingCredits,
-      message: `Reaching ${targetCgpa.toFixed(2)} would require a ${requiredGpa.toFixed(2)} GPA across ${remainingCredits} credits, which exceeds the 4.00 maximum. Scoring 4.00 in all remaining credits yields a maximum CGPA of ${maxPossibleCgpa.toFixed(2)}.`,
+      message: `Reaching ${targetCgpa.toFixed(2)} would require a ${requiredGpa.toFixed(2)} GPA across ${remainingCredits} credits, which exceeds the ${maxScale.toFixed(2)} maximum. Scoring ${maxScale.toFixed(2)} in all remaining credits yields a maximum CGPA of ${maxPossibleCgpa.toFixed(2)}.`,
     };
   }
 
-  const clampedRequired = Math.min(4.0, Math.max(0, requiredGpa));
+  const clampedRequired = Math.min(maxScale, Math.max(0, requiredGpa));
   return {
     kind: 'achievable',
     requiredGpa: clampedRequired,
@@ -593,3 +607,310 @@ export function formatDurationSeconds(sec: number | null | undefined): string {
   const rem = total % 60;
   return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
+
+export interface NextClassStatus {
+  state: 'none-today' | 'no-more-today' | 'ongoing' | 'upcoming';
+  classItem?: RoutineClass;
+  text: string;
+}
+
+export function getTodayNextClassStatus(
+  classes: RoutineClass[],
+  now: Date = new Date()
+): NextClassStatus {
+  const todayClasses = classes
+    .filter((c) => c.dayOfWeek === now.getDay())
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+  if (todayClasses.length === 0) {
+    return { state: 'none-today', text: 'No classes scheduled for today.' };
+  }
+
+  const currentMins = now.getHours() * 60 + now.getMinutes();
+
+  // Check if any is currently in progress
+  for (const c of todayClasses) {
+    const s = parseMinutesFromMidnight(c.startTime);
+    const e = parseMinutesFromMidnight(c.endTime);
+    if (s !== null && e !== null && currentMins >= s && currentMins < e) {
+      return {
+        state: 'ongoing',
+        classItem: c,
+        text: 'in progress now',
+      };
+    }
+  }
+
+  // Find next upcoming class
+  for (const c of todayClasses) {
+    const s = parseMinutesFromMidnight(c.startTime);
+    if (s !== null && currentMins < s) {
+      const diffMins = s - currentMins;
+      const hours = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      const timeStr =
+        hours > 0
+          ? mins > 0
+            ? `starts in ${hours}h ${mins}m`
+            : `starts in ${hours}h`
+          : `starts in ${mins}m`;
+      return {
+        state: 'upcoming',
+        classItem: c,
+        text: timeStr,
+      };
+    }
+  }
+
+  return { state: 'no-more-today', text: 'No more classes today.' };
+}
+
+export interface SemesterProgressInfo {
+  isSet: boolean;
+  isInside: boolean;
+  dayX: number;
+  totalY: number;
+  semesterName: string;
+}
+
+export function getSemesterProgress(
+  semesterSettings: SemesterSettings,
+  now: Date = new Date()
+): SemesterProgressInfo | null {
+  if (!semesterSettings.startDate || !semesterSettings.endDate) return null;
+  const startParts = parseLocalDateParts(semesterSettings.startDate);
+  const endParts = parseLocalDateParts(semesterSettings.endDate);
+  if (!startParts || !endParts) return null;
+
+  const startUtc = Date.UTC(startParts.year, startParts.month - 1, startParts.day);
+  const endUtc = Date.UTC(endParts.year, endParts.month - 1, endParts.day);
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (todayUtc >= startUtc && todayUtc <= endUtc) {
+    const dayX = Math.round((todayUtc - startUtc) / 86_400_000) + 1;
+    const totalY = Math.round((endUtc - startUtc) / 86_400_000) + 1;
+    if (totalY >= 1 && dayX >= 1 && dayX <= totalY) {
+      return {
+        isSet: true,
+        isInside: true,
+        dayX,
+        totalY,
+        semesterName: semesterSettings.semesterName,
+      };
+    }
+  }
+  return null;
+}
+
+export function getTodayHoliday(
+  semesterSettings: SemesterSettings,
+  now: Date = new Date()
+): SemesterHoliday | null {
+  const todayStr = toLocalDateString(now);
+  return semesterSettings.holidays.find((h) => h.date === todayStr) ?? null;
+}
+
+export interface ParsedCsvClass {
+  subject: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  room: string;
+  courseCode?: string;
+}
+
+export interface CsvImportResult {
+  validRows: ParsedCsvClass[];
+  rejectedRows: Array<{ rowNumber: number; rawText: string; reason: string }>;
+  overlapWarnings: Array<{ subject: string; warning: string }>;
+}
+
+export function parseRoutineCsv(
+  csvText: string,
+  existingClasses: RoutineClass[]
+): CsvImportResult {
+  const lines = csvText.split(/\r?\n/).map((l) => l.trim());
+  const validRows: ParsedCsvClass[] = [];
+  const rejectedRows: Array<{ rowNumber: number; rawText: string; reason: string }> = [];
+  const overlapWarnings: Array<{ subject: string; warning: string }> = [];
+
+  if (lines.length === 0 || (lines.length === 1 && !lines[0])) {
+    return { validRows, rejectedRows, overlapWarnings };
+  }
+
+  // Find header index
+  let headerIndex = -1;
+  let subjectCol = -1;
+  let dayCol = -1;
+  let startCol = -1;
+  let endCol = -1;
+  let roomCol = -1;
+  let courseCodeCol = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const cols = line.split(',').map((c) => c.trim().toLowerCase());
+    const sIdx = cols.findIndex((c) => c === 'subject' || c === 'course' || c === 'title');
+    const dIdx = cols.findIndex((c) => c === 'day' || c === 'dayofweek' || c === 'weekday');
+    const stIdx = cols.findIndex((c) => c === 'start' || c === 'starttime');
+    const eIdx = cols.findIndex((c) => c === 'end' || c === 'endtime');
+    const rIdx = cols.findIndex((c) => c === 'room' || c === 'classroom');
+    const codeIdx = cols.findIndex((c) => c === 'coursecode' || c === 'code');
+
+    if (sIdx !== -1 && dIdx !== -1 && stIdx !== -1 && eIdx !== -1) {
+      headerIndex = i;
+      subjectCol = sIdx;
+      dayCol = dIdx;
+      startCol = stIdx;
+      endCol = eIdx;
+      roomCol = rIdx;
+      courseCodeCol = codeIdx;
+      break;
+    }
+  }
+
+  // Helper to map weekday
+  const parseWeekday = (val: string): number | null => {
+    const v = val.trim().toLowerCase();
+    if (/^[0-6]$/.test(v)) return Number(v);
+    if (v === 'sunday' || v === 'sun') return 0;
+    if (v === 'monday' || v === 'mon') return 1;
+    if (v === 'tuesday' || v === 'tue') return 2;
+    if (v === 'wednesday' || v === 'wed') return 3;
+    if (v === 'thursday' || v === 'thu') return 4;
+    if (v === 'friday' || v === 'fri') return 5;
+    if (v === 'saturday' || v === 'sat') return 6;
+    return null;
+  };
+
+  // Helper to normalize and validate HH:MM
+  const parseTime = (val: string): string | null => {
+    let t = val.trim();
+    if (/^\d:[0-5]\d$/.test(t)) {
+      t = '0' + t;
+    }
+    const mins = parseMinutesFromMidnight(t);
+    return mins !== null ? t : null;
+  };
+
+  const startLine = headerIndex >= 0 ? headerIndex + 1 : 0;
+
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const rowNum = i + 1;
+    const cols = line.split(',').map((c) => c.trim());
+
+    let subject = '';
+    let dayRaw = '';
+    let startRaw = '';
+    let endRaw = '';
+    let room = '';
+    let courseCode = '';
+
+    if (headerIndex >= 0) {
+      subject = cols[subjectCol] ?? '';
+      dayRaw = cols[dayCol] ?? '';
+      startRaw = cols[startCol] ?? '';
+      endRaw = cols[endCol] ?? '';
+      room = roomCol >= 0 ? (cols[roomCol] ?? '') : '';
+      courseCode = courseCodeCol >= 0 ? (cols[courseCodeCol] ?? '') : '';
+    } else {
+      // Fallback column order: subject,day,start,end,room,courseCode
+      subject = cols[0] ?? '';
+      dayRaw = cols[1] ?? '';
+      startRaw = cols[2] ?? '';
+      endRaw = cols[3] ?? '';
+      room = cols[4] ?? '';
+      courseCode = cols[5] ?? '';
+    }
+
+    if (!subject) {
+      rejectedRows.push({ rowNumber: rowNum, rawText: line, reason: 'Subject name is required.' });
+      continue;
+    }
+
+    const dayOfWeek = parseWeekday(dayRaw);
+    if (dayOfWeek === null) {
+      rejectedRows.push({
+        rowNumber: rowNum,
+        rawText: line,
+        reason: `Unknown weekday "${dayRaw}". Use Saturday-Friday or 0-6.`,
+      });
+      continue;
+    }
+
+    const startTime = parseTime(startRaw);
+    if (!startTime) {
+      rejectedRows.push({
+        rowNumber: rowNum,
+        rawText: line,
+        reason: `Invalid start time "${startRaw}". Expected 24h format HH:MM (e.g. 09:30).`,
+      });
+      continue;
+    }
+
+    const endTime = parseTime(endRaw);
+    if (!endTime) {
+      rejectedRows.push({
+        rowNumber: rowNum,
+        rawText: line,
+        reason: `Invalid end time "${endRaw}". Expected 24h format HH:MM (e.g. 11:00).`,
+      });
+      continue;
+    }
+
+    const startM = parseMinutesFromMidnight(startTime)!;
+    const endM = parseMinutesFromMidnight(endTime)!;
+
+    if (endM <= startM) {
+      rejectedRows.push({
+        rowNumber: rowNum,
+        rawText: line,
+        reason: `End time (${endTime}) must be strictly after start time (${startTime}).`,
+      });
+      continue;
+    }
+
+    const parsedRow: ParsedCsvClass = {
+      subject,
+      dayOfWeek,
+      startTime,
+      endTime,
+      room,
+      courseCode: courseCode || undefined,
+    };
+
+    // Check overlap with existing schedule
+    const overlaps = findOverlappingClasses(
+      { dayOfWeek, startTime, endTime },
+      existingClasses
+    );
+    for (const ov of overlaps) {
+      overlapWarnings.push({
+        subject,
+        warning: `Overlaps with existing class "${ov.subject}" (${ov.startTime}–${ov.endTime}) on ${WEEKDAY_NAMES_FULL[dayOfWeek]}.`,
+      });
+    }
+
+    // Check overlap with other rows in this CSV import
+    for (const prevRow of validRows) {
+      if (prevRow.dayOfWeek === dayOfWeek) {
+        const sPrev = parseMinutesFromMidnight(prevRow.startTime)!;
+        const ePrev = parseMinutesFromMidnight(prevRow.endTime)!;
+        if (startM < ePrev && sPrev < endM) {
+          overlapWarnings.push({
+            subject,
+            warning: `Overlaps with another CSV row "${prevRow.subject}" (${prevRow.startTime}–${prevRow.endTime}) on ${WEEKDAY_NAMES_FULL[dayOfWeek]}.`,
+          });
+        }
+      }
+    }
+
+    validRows.push(parsedRow);
+  }
+
+  return { validRows, rejectedRows, overlapWarnings };
+}
+

@@ -26,6 +26,7 @@ import type { CompletedSemester, CurrentCourse } from '../types/campuskit';
 
 export const CgpaView: React.FC = () => {
   const {
+    settings,
     semesters,
     saveSemester,
     deleteSemester,
@@ -33,6 +34,8 @@ export const CgpaView: React.FC = () => {
     saveCourse,
     deleteCourse,
   } = useCampusKit();
+
+  const gradingScaleMax = settings.gradingScaleMax ?? 4.0;
 
   // Completed semester modal state
   const [semesterModalOpen, setSemesterModalOpen] = useState(false);
@@ -57,13 +60,14 @@ export const CgpaView: React.FC = () => {
   const [whatIfRemainingCredits, setWhatIfRemainingCredits] = useState('');
 
   // Calculations
-  const completedStats = computeCompletedCgpa(semesters);
-  const projectedStats = computeProjectedCgpa(semesters, courses);
+  const completedStats = computeCompletedCgpa(semesters, gradingScaleMax);
+  const projectedStats = computeProjectedCgpa(semesters, courses, gradingScaleMax);
   const whatIfResult = computeWhatIfGpa(
     whatIfCurrentCgpa,
     whatIfCompletedCredits,
     whatIfTargetCgpa,
-    whatIfRemainingCredits
+    whatIfRemainingCredits,
+    gradingScaleMax
   );
 
   // Prefill What-If from completed records
@@ -106,8 +110,8 @@ export const CgpaView: React.FC = () => {
       return;
     }
     const gpa = Number(semGpa);
-    if (!Number.isFinite(gpa) || gpa < 0 || gpa > 4.0) {
-      setSemError('GPA must be between 0.00 and 4.00.');
+    if (!Number.isFinite(gpa) || gpa < 0 || gpa > gradingScaleMax) {
+      setSemError(`GPA must be between 0.00 and ${gradingScaleMax.toFixed(2)}.`);
       return;
     }
 
@@ -152,8 +156,8 @@ export const CgpaView: React.FC = () => {
       return;
     }
     const gradePoints = Number(courseGradePoints);
-    if (!Number.isFinite(gradePoints) || gradePoints < 0 || gradePoints > 4.0) {
-      setCourseError('Expected grade points must be between 0.00 and 4.00.');
+    if (!Number.isFinite(gradePoints) || gradePoints < 0 || gradePoints > gradingScaleMax) {
+      setCourseError(`Expected grade points must be between 0.00 and ${gradingScaleMax.toFixed(2)}.`);
       return;
     }
 
@@ -174,7 +178,7 @@ export const CgpaView: React.FC = () => {
           <div>
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
               <GraduationCap className="h-4 w-4" aria-hidden="true" />
-              Academic Standing · 4.00 Scale
+              Academic Standing · {gradingScaleMax.toFixed(2)} Scale
             </span>
             <h1 className="mt-1 text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-50">
               Cumulative CGPA
@@ -196,7 +200,7 @@ export const CgpaView: React.FC = () => {
                 {completedStats.cgpa !== null ? completedStats.cgpa.toFixed(2) : '--'}
               </span>
               <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-                / 4.00
+                / {gradingScaleMax.toFixed(2)}
               </span>
             </div>
             <p className="mt-1 text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
@@ -490,8 +494,8 @@ export const CgpaView: React.FC = () => {
               type="number"
               step="0.01"
               min="0"
-              max="4.00"
-              placeholder="e.g. 3.45"
+              max={gradingScaleMax.toFixed(2)}
+              placeholder={`e.g. ${(gradingScaleMax * 0.85).toFixed(2)}`}
               value={whatIfCurrentCgpa}
               onChange={(e) => setWhatIfCurrentCgpa(e.target.value)}
               className="mt-1 block min-h-[44px] w-full rounded-xl border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100"
@@ -529,8 +533,8 @@ export const CgpaView: React.FC = () => {
               type="number"
               step="0.01"
               min="0"
-              max="4.00"
-              placeholder="e.g. 3.60"
+              max={gradingScaleMax.toFixed(2)}
+              placeholder={`e.g. ${(gradingScaleMax * 0.9).toFixed(2)}`}
               value={whatIfTargetCgpa}
               onChange={(e) => setWhatIfTargetCgpa(e.target.value)}
               className="mt-1 block min-h-[44px] w-full rounded-xl border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100"
@@ -583,7 +587,7 @@ export const CgpaView: React.FC = () => {
                       {whatIfResult.requiredGpa.toFixed(2)}
                     </span>
                     <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                      Required Average GPA / 4.00
+                      Required Average GPA / {gradingScaleMax.toFixed(2)}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-emerald-900 dark:text-emerald-200">
@@ -617,7 +621,7 @@ export const CgpaView: React.FC = () => {
                 <div>
                   <div className="flex items-baseline gap-2">
                     <span className="text-2xl font-black text-rose-950 dark:text-rose-100">
-                      Exceeds 4.00
+                      Exceeds {gradingScaleMax.toFixed(2)}
                     </span>
                     <span className="text-xs font-semibold text-rose-700 dark:text-rose-300">
                       (Needs {whatIfResult.requiredGpa.toFixed(2)})
@@ -704,8 +708,8 @@ export const CgpaView: React.FC = () => {
                 type="number"
                 step="0.01"
                 min="0"
-                max="4.00"
-                placeholder="e.g. 3.75"
+                max={gradingScaleMax.toFixed(2)}
+                placeholder={`e.g. ${(gradingScaleMax * 0.9).toFixed(2)}`}
                 value={semGpa}
                 onChange={(e) => setSemGpa(e.target.value)}
                 className="mt-1 block min-h-[44px] w-full rounded-xl border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100"
@@ -786,8 +790,8 @@ export const CgpaView: React.FC = () => {
                 type="number"
                 step="0.01"
                 min="0"
-                max="4.00"
-                placeholder="e.g. 3.70 (A-)"
+                max={gradingScaleMax.toFixed(2)}
+                placeholder={`e.g. ${(gradingScaleMax * 0.9).toFixed(2)}`}
                 value={courseGradePoints}
                 onChange={(e) => setCourseGradePoints(e.target.value)}
                 className="mt-1 block min-h-[44px] w-full rounded-xl border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-100"

@@ -9,7 +9,9 @@ import React, {
 } from 'react';
 import type {
   AppSettings,
+  AttendanceActionType,
   AttendanceSubject,
+  AttendanceUndoState,
   CompletedSemester,
   CurrentCourse,
   DeadlineItem,
@@ -17,6 +19,9 @@ import type {
   NoteItem,
   PersistedTimerState,
   RoutineClass,
+  RoutineCourse,
+  SemesterHoliday,
+  SemesterSettings,
   StudyPresetId,
   StudySession,
   TabId,
@@ -27,6 +32,7 @@ import {
   deleteAttachmentsForNote,
 } from '../storage/blobDb';
 import {
+  DEFAULT_SEMESTER_SETTINGS,
   DEFAULT_SETTINGS,
   DEFAULT_TIMER_STATE,
   LocalSnapshot,
@@ -38,7 +44,13 @@ import {
   ValidatedBackupPayload,
   writeStorageJson,
 } from '../storage/localStore';
-import { toLocalDateString } from '../utils/dateAndMath';
+import {
+  calendarDaysFromToday,
+  computeAttendanceMetrics,
+  formatLocalDateReadable,
+  parseMinutesFromMidnight,
+  toLocalDateString,
+} from '../utils/dateAndMath';
 
 export const STUDY_PRESETS: Record<
   StudyPresetId,
@@ -49,15 +61,6 @@ export const STUDY_PRESETS: Record<
   'break-5': { id: 'break-5', label: 'Break 5', minutes: 5, mode: 'break' },
   'break-15': { id: 'break-15', label: 'Break 15', minutes: 15, mode: 'break' },
 };
-
-export interface AttendanceUndoState {
-  subjectId: string;
-  subjectName: string;
-  actionLabel: 'Present' | 'Absent';
-  prevAttended: number;
-  prevTotal: number;
-  timestamp: number;
-}
 
 export type QuickModalRequest = 'add-class' | 'add-deadline' | 'record-attendance' | null;
 
@@ -76,6 +79,20 @@ interface CampusKitContextValue {
     input: Omit<RoutineClass, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
   ) => RoutineClass;
   deleteRoutineClass: (id: string) => void;
+  importRoutineClasses: (
+    classes: Array<Omit<RoutineClass, 'id' | 'createdAt' | 'updatedAt'>>
+  ) => number;
+
+  routineCourses: RoutineCourse[];
+  saveRoutineCourse: (
+    input: Omit<RoutineCourse, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  ) => RoutineCourse;
+  deleteRoutineCourse: (id: string) => void;
+
+  semesterSettings: SemesterSettings;
+  updateSemesterSettings: (patch: Partial<SemesterSettings>) => void;
+  addHoliday: (date: string, label: string) => SemesterHoliday;
+  removeHoliday: (id: string) => void;
 
   attendance: AttendanceSubject[];
   attendanceUndo: AttendanceUndoState | null;
@@ -84,7 +101,7 @@ interface CampusKitContextValue {
   saveAttendanceSubject: (
     input: Omit<AttendanceSubject, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
   ) => AttendanceSubject;
-  markAttendance: (subjectId: string, mark: 'present' | 'absent') => void;
+  markAttendance: (subjectId: string, mark: AttendanceActionType) => void;
   deleteAttendanceSubject: (id: string) => void;
 
   semesters: CompletedSemester[];
@@ -143,6 +160,8 @@ interface CampusKitContextValue {
   pendingCleanupIds: string[];
   retryPendingAttachmentCleanup: () => Promise<{ ok: boolean; error?: string }>;
 
+  requestNotificationPermission: () => Promise<'granted' | 'denied' | 'unsupported'>;
+
   exportBackupJson: () => Promise<string>;
   restoreFromValidatedBackup: (
     payload: ValidatedBackupPayload,
@@ -162,36 +181,24 @@ function playCompletionTone() {
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
-    if (ctx.state === 'suspended') {
-      ctx.close().catch(() => {});
-      return;
-    }
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.16);
-    gain.gain.setValueAtTime(0.001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.48);
-    setTimeout(() => {
-      ctx.close().catch(() => {});
-    }, 600);
+    osc.stop(ctx.currentTime + 0.36);
   } catch {
-    // Optional audio playback
+    // Audio tone is non-critical enhancement
   }
 }
 
 export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const initialRef = useRef<LocalSnapshot | null>(null);
-  if (!initialRef.current) {
-    initialRef.current = loadInitialSnapshot();
-  }
-  const init = initialRef.current;
+  const [init] = useState<LocalSnapshot>(() => loadInitialSnapshot());
 
   const [activeTab, setActiveTab] = useState<TabId>('today');
   const [quickModal, setQuickModal] = useState<QuickModalRequest>(null);
@@ -199,6 +206,10 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const [settings, setSettings] = useState<AppSettings>(init.settings);
   const [routine, setRoutine] = useState<RoutineClass[]>(init.routine);
+  const [routineCourses, setRoutineCourses] = useState<RoutineCourse[]>(init.routineCourses ?? []);
+  const [semesterSettings, setSemesterSettings] = useState<SemesterSettings>(
+    init.semesterSettings ?? DEFAULT_SEMESTER_SETTINGS
+  );
   const [attendance, setAttendance] = useState<AttendanceSubject[]>(init.attendance);
   const [attendanceUndo, setAttendanceUndo] = useState<AttendanceUndoState | null>(null);
   const [semesters, setSemesters] = useState<CompletedSemester[]>(init.semesters);
@@ -258,112 +269,20 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', refreshClock);
     return () => {
-      window.clearInterval(id);
+      clearInterval(id);
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', refreshClock);
     };
   }, []);
-
-  const finalizingTokenRef = useRef<string | null>(null);
-
-  const checkAndFinalizeCompletedTimer = useCallback(
-    (currentTimer: PersistedTimerState, currentNowMs: number) => {
-      if (currentTimer.status !== 'running' || currentTimer.startedAtMs === null) return;
-      const totalElapsed =
-        currentTimer.accumulatedElapsedMs + Math.max(0, currentNowMs - currentTimer.startedAtMs);
-      if (totalElapsed < currentTimer.durationMs) return;
-
-      if (finalizingTokenRef.current === currentTimer.sessionToken) return;
-      finalizingTokenRef.current = currentTimer.sessionToken;
-
-      const exactCompletedAtMs =
-        currentTimer.startedAtMs +
-        Math.max(0, currentTimer.durationMs - currentTimer.accumulatedElapsedMs);
-
-      const completedTimerState: PersistedTimerState = {
-        ...currentTimer,
-        status: 'completed',
-        startedAtMs: null,
-        accumulatedElapsedMs: currentTimer.durationMs,
-        savedSessionToken:
-          currentTimer.mode === 'focus'
-            ? currentTimer.sessionToken
-            : currentTimer.savedSessionToken,
-      };
-
-      setStudyTimer(completedTimerState);
-      safePersist(STORAGE_KEYS.studyTimer, completedTimerState);
-
-      if (
-        currentTimer.mode === 'focus' &&
-        currentTimer.savedSessionToken !== currentTimer.sessionToken
-      ) {
-        const focusMinutes = Math.round(currentTimer.durationMs / 60_000);
-        const presetMeta = STUDY_PRESETS[currentTimer.presetId];
-        const completionDateStr = toLocalDateString(new Date(exactCompletedAtMs));
-
-        setStudySessions((prev) => {
-          if (prev.some((s) => s.id === currentTimer.sessionToken)) {
-            return prev;
-          }
-          const newSession: StudySession = {
-            id: currentTimer.sessionToken,
-            date: completionDateStr,
-            minutes: focusMinutes,
-            source: 'timer',
-            label: presetMeta ? `${presetMeta.label} session` : `Focus ${focusMinutes}m`,
-            createdAt: exactCompletedAtMs,
-            updatedAt: Date.now(),
-          };
-          const next = [newSession, ...prev];
-          safePersist(STORAGE_KEYS.studySessions, next);
-          return next;
-        });
-
-        setTimerJustCompletedMessage(
-          `${focusMinutes} focus minutes recorded for ${completionDateStr}.`
-        );
-      } else if (currentTimer.mode === 'break') {
-        setTimerJustCompletedMessage('Break finished. Ready for your next focus block.');
-      }
-
-      if (settings.soundEnabled && document.visibilityState === 'visible') {
-        playCompletionTone();
-      }
-      setNow(new Date());
-    },
-    [safePersist, settings.soundEnabled]
-  );
-
-  useEffect(() => {
-    checkAndFinalizeCompletedTimer(studyTimer, Date.now());
-    if (studyTimer.status !== 'running') return;
-
-    const interval = window.setInterval(() => {
-      const ms = Date.now();
-      setTimerTickMs(ms);
-      checkAndFinalizeCompletedTimer(studyTimer, ms);
-    }, 250);
-
-    return () => window.clearInterval(interval);
-  }, [studyTimer, checkAndFinalizeCompletedTimer]);
-
-  const timerRemainingMs = useMemo(() => {
-    if (studyTimer.status === 'completed') return 0;
-    const liveDelta =
-      studyTimer.status === 'running' && studyTimer.startedAtMs !== null
-        ? Math.max(0, timerTickMs - studyTimer.startedAtMs)
-        : 0;
-    const elapsed = studyTimer.accumulatedElapsedMs + liveDelta;
-    return Math.max(0, studyTimer.durationMs - elapsed);
-  }, [studyTimer, timerTickMs]);
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
       setSettings((prev) => {
-        const next = { ...prev, ...patch };
+        const next: AppSettings = {
+          ...prev,
+          ...patch,
+          reminders: patch.reminders ? { ...prev.reminders, ...patch.reminders } : prev.reminders,
+        };
         safePersist(STORAGE_KEYS.settings, next);
         return next;
       });
@@ -371,6 +290,138 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  // In-app Reminders checker (checks on load and every 60 seconds)
+  useEffect(() => {
+    const checkReminders = () => {
+      if (typeof window === 'undefined' || typeof Notification === 'undefined') return;
+      if (Notification.permission !== 'granted') return;
+      if (
+        !settings.reminders.classReminders &&
+        !settings.reminders.deadlineReminders &&
+        !settings.reminders.attendanceRiskReminders
+      ) {
+        return;
+      }
+
+      const todayStr = toLocalDateString(now);
+      let sentRecord: { date: string; keys: string[] } = { date: todayStr, keys: [] };
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.remindersSent);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.date === todayStr && Array.isArray(parsed.keys)) {
+            sentRecord = parsed;
+          }
+        }
+      } catch {
+        // Fallback to empty sent record
+      }
+
+      const sentKeys = new Set<string>(sentRecord.keys);
+      let updatedSent = false;
+
+      // 1. Class reminders (starts within 60 minutes)
+      if (settings.reminders.classReminders) {
+        const todayDay = now.getDay();
+        const currentMins = now.getHours() * 60 + now.getMinutes();
+        for (const c of routine) {
+          if (c.dayOfWeek === todayDay) {
+            const startM = parseMinutesFromMidnight(c.startTime);
+            if (startM !== null && startM > currentMins && startM <= currentMins + 60) {
+              const key = `class-${c.id}-${todayStr}`;
+              if (!sentKeys.has(key)) {
+                sentKeys.add(key);
+                updatedSent = true;
+                const diff = startM - currentMins;
+                const body = `Class starts in ${diff} min${diff === 1 ? '' : 's'}${c.room ? ` in Room ${c.room}` : ''}.`;
+                try {
+                  new Notification(`Upcoming Class: ${c.subject}`, { body, icon: '/icon.svg' });
+                } catch {
+                  // Notification delivery error
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Deadline reminders (due tomorrow)
+      if (settings.reminders.deadlineReminders) {
+        for (const d of deadlines) {
+          if (!d.completed && calendarDaysFromToday(d.dueDate, now) === 1) {
+            const key = `deadline-${d.id}-${todayStr}`;
+            if (!sentKeys.has(key)) {
+              sentKeys.add(key);
+              updatedSent = true;
+              try {
+                new Notification(`Deadline Tomorrow: ${d.title}`, {
+                  body: `${d.type} is due tomorrow (${formatLocalDateReadable(d.dueDate)}).`,
+                  icon: '/icon.svg',
+                });
+              } catch {
+                // Notification delivery error
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Attendance risk reminders (any subject below required %)
+      if (settings.reminders.attendanceRiskReminders) {
+        for (const s of attendance) {
+          if (s.total > 0) {
+            const metrics = computeAttendanceMetrics(s);
+            if (metrics.status === 'Below') {
+              const key = `attend-risk-${s.id}-${todayStr}`;
+              if (!sentKeys.has(key)) {
+                sentKeys.add(key);
+                updatedSent = true;
+                try {
+                  new Notification(`Attendance Warning: ${s.name}`, {
+                    body: `Attendance is at ${metrics.percentage?.toFixed(1)}% (below target ${s.requiredPercentage}%). ${metrics.summaryText}`,
+                    icon: '/icon.svg',
+                  });
+                } catch {
+                  // Notification delivery error
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (updatedSent) {
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.remindersSent,
+            JSON.stringify({ date: todayStr, keys: Array.from(sentKeys) })
+          );
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    checkReminders();
+    const interval = setInterval(checkReminders, 60_000);
+    return () => clearInterval(interval);
+  }, [settings.reminders, routine, deadlines, attendance, now]);
+
+  const requestNotificationPermission = useCallback(async (): Promise<
+    'granted' | 'denied' | 'unsupported'
+  > => {
+    if (typeof window === 'undefined' || typeof Notification === 'undefined') {
+      return 'unsupported';
+    }
+    try {
+      const res = await Notification.requestPermission();
+      return res === 'granted' ? 'granted' : 'denied';
+    } catch {
+      return 'unsupported';
+    }
+  }, []);
+
+  // Routine Classes CRUD
   const saveRoutineClass = useCallback(
     (
       input: Omit<RoutineClass, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -386,6 +437,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           startTime: input.startTime.trim(),
           endTime: input.endTime.trim(),
           room: input.room.trim(),
+          courseId: input.courseId ? input.courseId.trim() : undefined,
           createdAt: existing ? existing.createdAt : ts,
           updatedAt: ts,
         };
@@ -411,6 +463,123 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  const importRoutineClasses = useCallback(
+    (imported: Array<Omit<RoutineClass, 'id' | 'createdAt' | 'updatedAt'>>): number => {
+      const ts = Date.now();
+      const newItems: RoutineClass[] = imported.map((item) => ({
+        id: createId(),
+        subject: item.subject.trim(),
+        dayOfWeek: item.dayOfWeek,
+        startTime: item.startTime.trim(),
+        endTime: item.endTime.trim(),
+        room: item.room ? item.room.trim() : '',
+        courseId: item.courseId ? item.courseId.trim() : undefined,
+        createdAt: ts,
+        updatedAt: ts,
+      }));
+
+      setRoutine((prev) => {
+        const next = [...prev, ...newItems];
+        safePersist(STORAGE_KEYS.routine, next);
+        return next;
+      });
+      return newItems.length;
+    },
+    [safePersist]
+  );
+
+  // Routine Courses CRUD
+  const saveRoutineCourse = useCallback(
+    (
+      input: Omit<RoutineCourse, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+    ): RoutineCourse => {
+      const ts = Date.now();
+      let saved!: RoutineCourse;
+      setRoutineCourses((prev) => {
+        const existing = input.id ? prev.find((c) => c.id === input.id) : undefined;
+        saved = {
+          id: existing ? existing.id : createId(),
+          name: input.name.trim(),
+          courseCode: input.courseCode.trim(),
+          credits: input.credits,
+          teacher: input.teacher.trim(),
+          classroom: input.classroom.trim(),
+          createdAt: existing ? existing.createdAt : ts,
+          updatedAt: ts,
+        };
+        const next = existing
+          ? prev.map((c) => (c.id === saved.id ? saved : c))
+          : [...prev, saved];
+        safePersist(STORAGE_KEYS.routineCourses, next);
+        return next;
+      });
+      return saved;
+    },
+    [safePersist]
+  );
+
+  const deleteRoutineCourse = useCallback(
+    (id: string) => {
+      setRoutineCourses((prev) => {
+        const next = prev.filter((c) => c.id !== id);
+        safePersist(STORAGE_KEYS.routineCourses, next);
+        return next;
+      });
+    },
+    [safePersist]
+  );
+
+  // Semester Settings & Holidays CRUD
+  const updateSemesterSettings = useCallback(
+    (patch: Partial<SemesterSettings>) => {
+      setSemesterSettings((prev) => {
+        const next: SemesterSettings = {
+          ...prev,
+          ...patch,
+          holidays: patch.holidays ? patch.holidays : prev.holidays,
+        };
+        safePersist(STORAGE_KEYS.semesterSettings, next);
+        return next;
+      });
+    },
+    [safePersist]
+  );
+
+  const addHoliday = useCallback(
+    (date: string, label: string): SemesterHoliday => {
+      const holiday: SemesterHoliday = {
+        id: createId(),
+        date: date.trim(),
+        label: label.trim(),
+      };
+      setSemesterSettings((prev) => {
+        const next: SemesterSettings = {
+          ...prev,
+          holidays: [...prev.holidays, holiday],
+        };
+        safePersist(STORAGE_KEYS.semesterSettings, next);
+        return next;
+      });
+      return holiday;
+    },
+    [safePersist]
+  );
+
+  const removeHoliday = useCallback(
+    (id: string) => {
+      setSemesterSettings((prev) => {
+        const next: SemesterSettings = {
+          ...prev,
+          holidays: prev.holidays.filter((h) => h.id !== id),
+        };
+        safePersist(STORAGE_KEYS.semesterSettings, next);
+        return next;
+      });
+    },
+    [safePersist]
+  );
+
+  // Attendance CRUD + 4-way Actions & Undo
   const saveAttendanceSubject = useCallback(
     (
       input: Omit<AttendanceSubject, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -425,6 +594,14 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           requiredPercentage: Math.round(input.requiredPercentage * 100) / 100,
           total: Math.trunc(input.total),
           attended: Math.trunc(input.attended),
+          lateCount:
+            input.lateCount !== undefined
+              ? Math.trunc(input.lateCount)
+              : (existing?.lateCount ?? 0),
+          excusedCount:
+            input.excusedCount !== undefined
+              ? Math.trunc(input.excusedCount)
+              : (existing?.excusedCount ?? 0),
           createdAt: existing ? existing.createdAt : ts,
           updatedAt: ts,
         };
@@ -440,22 +617,53 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   );
 
   const markAttendance = useCallback(
-    (subjectId: string, mark: 'present' | 'absent') => {
+    (subjectId: string, mark: AttendanceActionType) => {
       setAttendance((prev) => {
         const target = prev.find((a) => a.id === subjectId);
         if (!target) return prev;
+        const curLate = target.lateCount ?? 0;
+        const curExcused = target.excusedCount ?? 0;
+
+        let label: 'Present' | 'Absent' | 'Late' | 'Excused' = 'Present';
+        let newAttended = target.attended;
+        let newTotal = target.total;
+        let newLate = curLate;
+        let newExcused = curExcused;
+
+        if (mark === 'present') {
+          label = 'Present';
+          newAttended = target.attended + 1;
+          newTotal = target.total + 1;
+        } else if (mark === 'absent') {
+          label = 'Absent';
+          newTotal = target.total + 1;
+        } else if (mark === 'late') {
+          label = 'Late';
+          newAttended = target.attended + 1;
+          newTotal = target.total + 1;
+          newLate = curLate + 1;
+        } else if (mark === 'excused') {
+          label = 'Excused';
+          newExcused = curExcused + 1;
+        }
+
         setAttendanceUndo({
           subjectId: target.id,
           subjectName: target.name,
-          actionLabel: mark === 'present' ? 'Present' : 'Absent',
+          actionLabel: label,
           prevAttended: target.attended,
           prevTotal: target.total,
+          prevLateCount: curLate,
+          prevExcusedCount: curExcused,
           timestamp: Date.now(),
         });
+
         const updated: AttendanceSubject = {
           ...target,
-          total: target.total + 1,
-          attended: mark === 'present' ? target.attended + 1 : target.attended,
+          total: newTotal,
+          attended: newAttended,
+          lateCount: newLate,
+          excusedCount: newExcused,
           updatedAt: Date.now(),
         };
         const next = prev.map((a) => (a.id === subjectId ? updated : a));
@@ -476,6 +684,8 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               ...a,
               attended: undoSnap.prevAttended,
               total: undoSnap.prevTotal,
+              lateCount: undoSnap.prevLateCount,
+              excusedCount: undoSnap.prevExcusedCount,
               updatedAt: Date.now(),
             }
           : a
@@ -500,6 +710,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  // Semesters CRUD
   const saveSemester = useCallback(
     (
       input: Omit<CompletedSemester, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -538,6 +749,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  // Courses CRUD
   const saveCourse = useCallback(
     (
       input: Omit<CurrentCourse, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -576,6 +788,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  // Deadlines CRUD
   const saveDeadline = useCallback(
     (
       input: Omit<DeadlineItem, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
@@ -588,7 +801,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           id: existing ? existing.id : createId(),
           title: input.title.trim(),
           type: input.type,
-          dueDate: input.dueDate.trim(),
+          dueDate: input.dueDate,
           completed: input.completed,
           createdAt: existing ? existing.createdAt : ts,
           updatedAt: ts,
@@ -628,95 +841,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
-  const selectStudyPreset = useCallback(
-    (presetId: StudyPresetId) => {
-      const preset = STUDY_PRESETS[presetId];
-      finalizingTokenRef.current = null;
-      const next: PersistedTimerState = {
-        presetId: preset.id,
-        mode: preset.mode,
-        durationMs: preset.minutes * 60 * 1000,
-        status: 'idle',
-        startedAtMs: null,
-        accumulatedElapsedMs: 0,
-        sessionToken: createId(),
-        savedSessionToken: null,
-      };
-      setTimerTickMs(Date.now());
-      setTimerJustCompletedMessage(null);
-      setStudyTimer(next);
-      safePersist(STORAGE_KEYS.studyTimer, next);
-    },
-    [safePersist]
-  );
-
-  const startOrResumeTimer = useCallback(() => {
-    const ms = Date.now();
-    setTimerTickMs(ms);
-    setTimerJustCompletedMessage(null);
-    setStudyTimer((prev) => {
-      if (prev.status === 'running') return prev;
-      const isFreshStart = prev.status === 'idle' || prev.status === 'completed';
-      const token = isFreshStart ? createId() : prev.sessionToken;
-      if (isFreshStart) {
-        finalizingTokenRef.current = null;
-      }
-      const next: PersistedTimerState = {
-        ...prev,
-        status: 'running',
-        startedAtMs: ms,
-        accumulatedElapsedMs: isFreshStart ? 0 : prev.accumulatedElapsedMs,
-        sessionToken: token,
-        savedSessionToken: isFreshStart ? null : prev.savedSessionToken,
-      };
-      safePersist(STORAGE_KEYS.studyTimer, next);
-      return next;
-    });
-  }, [safePersist]);
-
-  const pauseTimer = useCallback(() => {
-    const ms = Date.now();
-    setTimerTickMs(ms);
-    setStudyTimer((prev) => {
-      if (prev.status !== 'running' || prev.startedAtMs === null) return prev;
-      const elapsed = Math.min(
-        prev.durationMs,
-        prev.accumulatedElapsedMs + Math.max(0, ms - prev.startedAtMs)
-      );
-      const next: PersistedTimerState = {
-        ...prev,
-        status: 'paused',
-        startedAtMs: null,
-        accumulatedElapsedMs: elapsed,
-      };
-      safePersist(STORAGE_KEYS.studyTimer, next);
-      return next;
-    });
-  }, [safePersist]);
-
-  const resetTimer = useCallback(() => {
-    finalizingTokenRef.current = null;
-    setTimerTickMs(Date.now());
-    setTimerJustCompletedMessage(null);
-    setStudyTimer((prev) => {
-      const next: PersistedTimerState = {
-        ...prev,
-        status: 'idle',
-        startedAtMs: null,
-        accumulatedElapsedMs: 0,
-        sessionToken: createId(),
-        savedSessionToken: null,
-      };
-      safePersist(STORAGE_KEYS.studyTimer, next);
-      return next;
-    });
-  }, [safePersist]);
-
-  const dismissTimerCompletedMessage = useCallback(
-    () => setTimerJustCompletedMessage(null),
-    []
-  );
-
+  // Study Sessions & Pomodoro Timer
   const saveManualStudySession = useCallback(
     (input: { id?: string; date: string; minutes: number; label: string }): StudySession => {
       const ts = Date.now();
@@ -725,10 +850,10 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const existing = input.id ? prev.find((s) => s.id === input.id) : undefined;
         saved = {
           id: existing ? existing.id : createId(),
-          date: input.date.trim(),
-          minutes: Math.trunc(input.minutes),
-          source: existing ? existing.source : 'manual',
-          label: input.label.trim() || 'Manual study log',
+          date: input.date,
+          minutes: Math.round(input.minutes),
+          source: 'manual',
+          label: input.label.trim() || 'Study Session',
           createdAt: existing ? existing.createdAt : ts,
           updatedAt: ts,
         };
@@ -754,6 +879,152 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [safePersist]
   );
 
+  // Timer Tick & State
+  useEffect(() => {
+    if (studyTimer.status !== 'running') return;
+    const interval = setInterval(() => {
+      setTimerTickMs(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [studyTimer.status]);
+
+  const timerRemainingMs = useMemo(() => {
+    if (studyTimer.status === 'idle') return studyTimer.durationMs;
+    let elapsed = studyTimer.accumulatedElapsedMs;
+    if (studyTimer.status === 'running' && studyTimer.startedAtMs !== null) {
+      elapsed += Math.max(0, timerTickMs - studyTimer.startedAtMs);
+    }
+    return Math.max(0, studyTimer.durationMs - elapsed);
+  }, [
+    studyTimer.status,
+    studyTimer.durationMs,
+    studyTimer.accumulatedElapsedMs,
+    studyTimer.startedAtMs,
+    timerTickMs,
+  ]);
+
+  // Check completion
+  useEffect(() => {
+    if (studyTimer.status === 'running' && timerRemainingMs <= 0) {
+      const preset = STUDY_PRESETS[studyTimer.presetId];
+      if (preset.mode === 'focus' && studyTimer.savedSessionToken !== studyTimer.sessionToken) {
+        const dateStr = toLocalDateString(new Date());
+        const focusMins = Math.round(preset.minutes);
+        const newSession: StudySession = {
+          id: createId(),
+          date: dateStr,
+          minutes: focusMins,
+          source: 'timer',
+          label: `${preset.label} Complete`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        setStudySessions((prev) => {
+          const next = [newSession, ...prev];
+          safePersist(STORAGE_KEYS.studySessions, next);
+          return next;
+        });
+      }
+
+      if (settings.soundEnabled) {
+        playCompletionTone();
+      }
+
+      setTimerJustCompletedMessage(
+        preset.mode === 'focus'
+          ? `Great focus! You finished ${preset.label} (${preset.minutes} min). Take a well-earned break.`
+          : `Break time is over! Ready for your next study block?`
+      );
+
+      const completedState: PersistedTimerState = {
+        ...studyTimer,
+        status: 'completed',
+        startedAtMs: null,
+        accumulatedElapsedMs: studyTimer.durationMs,
+        savedSessionToken: studyTimer.sessionToken,
+      };
+      setStudyTimer(completedState);
+      safePersist(STORAGE_KEYS.studyTimer, completedState);
+    }
+  }, [
+    studyTimer,
+    timerRemainingMs,
+    settings.soundEnabled,
+    safePersist,
+  ]);
+
+  const selectStudyPreset = useCallback(
+    (presetId: StudyPresetId) => {
+      const preset = STUDY_PRESETS[presetId];
+      const next: PersistedTimerState = {
+        presetId,
+        mode: preset.mode,
+        durationMs: preset.minutes * 60 * 1000,
+        status: 'idle',
+        startedAtMs: null,
+        accumulatedElapsedMs: 0,
+        sessionToken: createId(),
+        savedSessionToken: null,
+      };
+      setStudyTimer(next);
+      setTimerTickMs(Date.now());
+      safePersist(STORAGE_KEYS.studyTimer, next);
+    },
+    [safePersist]
+  );
+
+  const startOrResumeTimer = useCallback(() => {
+    const ts = Date.now();
+    setStudyTimer((prev) => {
+      const next: PersistedTimerState = {
+        ...prev,
+        status: 'running',
+        startedAtMs: ts,
+      };
+      safePersist(STORAGE_KEYS.studyTimer, next);
+      return next;
+    });
+    setTimerTickMs(ts);
+  }, [safePersist]);
+
+  const pauseTimer = useCallback(() => {
+    const ts = Date.now();
+    setStudyTimer((prev) => {
+      if (prev.status !== 'running' || prev.startedAtMs === null) return prev;
+      const newlyElapsed = Math.max(0, ts - prev.startedAtMs);
+      const next: PersistedTimerState = {
+        ...prev,
+        status: 'paused',
+        startedAtMs: null,
+        accumulatedElapsedMs: prev.accumulatedElapsedMs + newlyElapsed,
+      };
+      safePersist(STORAGE_KEYS.studyTimer, next);
+      return next;
+    });
+    setTimerTickMs(ts);
+  }, [safePersist]);
+
+  const resetTimer = useCallback(() => {
+    setStudyTimer((prev) => {
+      const next: PersistedTimerState = {
+        ...prev,
+        status: 'idle',
+        startedAtMs: null,
+        accumulatedElapsedMs: 0,
+        sessionToken: createId(),
+        savedSessionToken: null,
+      };
+      safePersist(STORAGE_KEYS.studyTimer, next);
+      return next;
+    });
+    setTimerTickMs(Date.now());
+  }, [safePersist]);
+
+  const dismissTimerCompletedMessage = useCallback(() => {
+    setTimerJustCompletedMessage(null);
+  }, []);
+
+  // Notes Management
   const openNewNoteImmediately = useCallback((): NoteItem => {
     const ts = Date.now();
     const newNote: NoteItem = {
@@ -766,140 +1037,97 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
     setNotes((prev) => {
       const next = [newNote, ...prev];
-      try {
-        writeStorageJson(STORAGE_KEYS.notes, next);
-      } catch {
-        // Handled in editor
-      }
+      safePersist(STORAGE_KEYS.notes, next);
       return next;
     });
     setActiveNoteId(newNote.id);
-    setActiveTab('notes');
     return newNote;
-  }, []);
+  }, [safePersist]);
 
   const updateNoteTextSync = useCallback(
     (noteId: string, title: string, body: string): { ok: boolean; error?: string } => {
       const ts = Date.now();
-      let writeResult: { ok: boolean; error?: string } = { ok: true };
+      let res: { ok: boolean; error?: string } = { ok: true };
       setNotes((prev) => {
         const next = prev.map((n) =>
           n.id === noteId ? { ...n, title, body, updatedAt: ts } : n
         );
-        try {
-          writeStorageJson(STORAGE_KEYS.notes, next);
-        } catch (err) {
-          writeResult = {
-            ok: false,
-            error:
-              err instanceof Error ? err.message : 'Unable to save note text to localStorage.',
-          };
-        }
+        res = safePersist(STORAGE_KEYS.notes, next);
         return next;
       });
-      return writeResult;
+      return res;
     },
-    []
+    [safePersist]
   );
 
   const attachMetaToNoteSync = useCallback(
     (noteId: string, meta: NoteAttachmentMeta): { ok: boolean; error?: string } => {
-      const ts = Date.now();
-      let writeResult: { ok: boolean; error?: string } = { ok: true };
+      let res: { ok: boolean; error?: string } = { ok: true };
       setNotes((prev) => {
-        const next = prev.map((n) => {
-          if (n.id !== noteId) return n;
-          const exists = n.attachments.some((a) => a.id === meta.id);
-          return {
-            ...n,
-            attachments: exists ? n.attachments : [...n.attachments, meta],
-            updatedAt: ts,
-          };
-        });
-        try {
-          writeStorageJson(STORAGE_KEYS.notes, next);
-        } catch (err) {
-          writeResult = {
-            ok: false,
-            error:
-              err instanceof Error
-                ? err.message
-                : 'Unable to save attachment reference to localStorage.',
-          };
-        }
+        const next = prev.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                attachments: [...n.attachments, meta],
+                updatedAt: Date.now(),
+              }
+            : n
+        );
+        res = safePersist(STORAGE_KEYS.notes, next);
         return next;
       });
-      return writeResult;
+      return res;
     },
-    []
+    [safePersist]
   );
 
   const removeAttachmentFromNoteSync = useCallback(
     (noteId: string, attachmentId: string): { ok: boolean; error?: string } => {
-      const ts = Date.now();
-      let writeResult: { ok: boolean; error?: string } = { ok: true };
+      let res: { ok: boolean; error?: string } = { ok: true };
       setNotes((prev) => {
         const next = prev.map((n) =>
           n.id === noteId
             ? {
                 ...n,
                 attachments: n.attachments.filter((a) => a.id !== attachmentId),
-                updatedAt: ts,
+                updatedAt: Date.now(),
               }
             : n
         );
-        try {
-          writeStorageJson(STORAGE_KEYS.notes, next);
-        } catch (err) {
-          writeResult = {
-            ok: false,
-            error:
-              err instanceof Error ? err.message : 'Failed to update note metadata.',
-          };
-        }
+        res = safePersist(STORAGE_KEYS.notes, next);
         return next;
       });
-      return writeResult;
+      return res;
     },
-    []
+    [safePersist]
   );
 
   const deleteNoteWithCleanup = useCallback(
     async (noteId: string): Promise<{ deletedNote: boolean; cleanupError?: string }> => {
-      const targetNote = notes.find((n) => n.id === noteId);
-      const attachmentIds = targetNote ? targetNote.attachments.map((a) => a.id) : [];
+      const target = notes.find((n) => n.id === noteId);
+      const attIds = target ? target.attachments.map((a) => a.id) : [];
 
       setNotes((prev) => {
         const next = prev.filter((n) => n.id !== noteId);
         safePersist(STORAGE_KEYS.notes, next);
         return next;
       });
-      setActiveNoteId((prev) => (prev === noteId ? null : prev));
 
-      if (attachmentIds.length === 0) {
+      if (attIds.length > 0) {
         try {
-          await deleteAttachmentsForNote(noteId, []);
-        } catch {
-          // ignore
+          await deleteAttachmentsForNote(noteId, attIds);
+          return { deletedNote: true };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Orphan cleanup error';
+          setPendingCleanupIds((prev) => {
+            const next = Array.from(new Set([...prev, ...attIds]));
+            safePersist(STORAGE_KEYS.pendingCleanupIds, next);
+            return next;
+          });
+          return { deletedNote: true, cleanupError: msg };
         }
-        return { deletedNote: true };
       }
-
-      try {
-        await deleteAttachmentsForNote(noteId, attachmentIds);
-        return { deletedNote: true };
-      } catch (err) {
-        const errMsg =
-          err instanceof Error
-            ? err.message
-            : 'Note was deleted, but cleaning up its attachment blobs in IndexedDB failed.';
-        setPendingCleanupIds((prev) => {
-          const merged = Array.from(new Set([...prev, ...attachmentIds]));
-          safePersist(STORAGE_KEYS.pendingCleanupIds, merged);
-          return merged;
-        });
-        return { deletedNote: true, cleanupError: errMsg };
-      }
+      return { deletedNote: true };
     },
     [notes, safePersist]
   );
@@ -915,20 +1143,18 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       safePersist(STORAGE_KEYS.pendingCleanupIds, []);
       return { ok: true };
     } catch (err) {
-      return {
-        ok: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Attachment storage cleanup failed again. Please retry.',
-      };
+      const msg = err instanceof Error ? err.message : 'Retry cleanup failed.';
+      return { ok: false, error: msg };
     }
   }, [pendingCleanupIds, safePersist]);
 
+  // Full Backup Export
   const exportBackupJson = useCallback(async (): Promise<string> => {
-    const snapshot: LocalSnapshot = {
+    const currentSnap: LocalSnapshot = {
       settings,
       routine,
+      routineCourses,
+      semesterSettings,
       attendance,
       semesters,
       courses,
@@ -938,11 +1164,13 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       notes,
       pendingCleanupIds,
     };
-    const archive = await buildBackupArchive(snapshot);
+    const archive = await buildBackupArchive(currentSnap);
     return JSON.stringify(archive, null, 2);
   }, [
     settings,
     routine,
+    routineCourses,
+    semesterSettings,
     attendance,
     semesters,
     courses,
@@ -953,11 +1181,14 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     pendingCleanupIds,
   ]);
 
+  // Full Backup Restore
   const restoreFromValidatedBackup = useCallback(
     async (payload: ValidatedBackupPayload, mode: 'merge' | 'replace'): Promise<void> => {
       const currentSnap: LocalSnapshot = {
         settings,
         routine,
+        routineCourses,
+        semesterSettings,
         attendance,
         semesters,
         courses,
@@ -970,6 +1201,8 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const restored = await executeValidatedRestore(currentSnap, payload, mode);
       setSettings(restored.settings);
       setRoutine(restored.routine);
+      setRoutineCourses(restored.routineCourses);
+      setSemesterSettings(restored.semesterSettings);
       setAttendance(restored.attendance);
       setAttendanceUndo(null);
       setSemesters(restored.semesters);
@@ -984,6 +1217,8 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [
       settings,
       routine,
+      routineCourses,
+      semesterSettings,
       attendance,
       semesters,
       courses,
@@ -995,6 +1230,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     ]
   );
 
+  // Clear All Data
   const clearAllAppData = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     try {
       await clearAllAttachmentBlobs();
@@ -1004,6 +1240,8 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const freshTimer = { ...DEFAULT_TIMER_STATE, sessionToken: createId() };
       setSettings({ ...DEFAULT_SETTINGS });
       setRoutine([]);
+      setRoutineCourses([]);
+      setSemesterSettings({ ...DEFAULT_SEMESTER_SETTINGS });
       setAttendance([]);
       setAttendanceUndo(null);
       setSemesters([]);
@@ -1038,6 +1276,14 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       routine,
       saveRoutineClass,
       deleteRoutineClass,
+      importRoutineClasses,
+      routineCourses,
+      saveRoutineCourse,
+      deleteRoutineCourse,
+      semesterSettings,
+      updateSemesterSettings,
+      addHoliday,
+      removeHoliday,
       attendance,
       attendanceUndo,
       dismissAttendanceUndo,
@@ -1076,6 +1322,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       deleteNoteWithCleanup,
       pendingCleanupIds,
       retryPendingAttachmentCleanup,
+      requestNotificationPermission,
       exportBackupJson,
       restoreFromValidatedBackup,
       clearAllAppData,
@@ -1091,6 +1338,14 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       routine,
       saveRoutineClass,
       deleteRoutineClass,
+      importRoutineClasses,
+      routineCourses,
+      saveRoutineCourse,
+      deleteRoutineCourse,
+      semesterSettings,
+      updateSemesterSettings,
+      addHoliday,
+      removeHoliday,
       attendance,
       attendanceUndo,
       dismissAttendanceUndo,
@@ -1128,6 +1383,7 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       deleteNoteWithCleanup,
       pendingCleanupIds,
       retryPendingAttachmentCleanup,
+      requestNotificationPermission,
       exportBackupJson,
       restoreFromValidatedBackup,
       clearAllAppData,

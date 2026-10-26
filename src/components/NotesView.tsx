@@ -449,6 +449,10 @@ export const NotesView: React.FC = () => {
             </div>
           </div>
 
+          <p className="text-[11px] text-stone-400 dark:text-stone-500 pb-1">
+            Your microphone is used only to record voice notes. Recordings are stored only on this device.
+          </p>
+
           {/* Attachments List */}
           {currentNote.attachments.length > 0 && (
             <div className="mt-2 space-y-2">

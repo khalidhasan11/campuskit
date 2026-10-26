@@ -2,13 +2,16 @@ import React, { useMemo } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
+  CalendarDays,
   CalendarPlus,
   CheckSquare,
   Clock,
   FilePlus2,
   Flame,
+  PartyPopper,
   Play,
   Plus,
+  Sparkles,
 } from 'lucide-react';
 import { useCampusKit } from '../context/CampusKitContext';
 import {
@@ -19,6 +22,9 @@ import {
   formatDeadlineCountdown,
   formatLocalDateReadable,
   getClassLiveState,
+  getSemesterProgress,
+  getTodayHoliday,
+  getTodayNextClassStatus,
 } from '../utils/dateAndMath';
 
 export const TodayView: React.FC = () => {
@@ -26,6 +32,7 @@ export const TodayView: React.FC = () => {
     now,
     settings,
     routine,
+    semesterSettings,
     attendance,
     deadlines,
     studySessions,
@@ -85,13 +92,37 @@ export const TodayView: React.FC = () => {
     }
   };
 
+  const nextClassStatus = useMemo(
+    () => getTodayNextClassStatus(routine, now),
+    [routine, now]
+  );
+
+  const todayHoliday = useMemo(
+    () => getTodayHoliday(semesterSettings, now),
+    [semesterSettings, now]
+  );
+
+  const semesterProgress = useMemo(
+    () => getSemesterProgress(semesterSettings, now),
+    [semesterSettings, now]
+  );
+
   return (
     <div className="space-y-6">
       <section className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
         <div>
-          <p className="text-xs font-medium text-stone-500 dark:text-stone-400">
-            {todayReadable}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-medium text-stone-500 dark:text-stone-400">
+              {todayReadable}
+            </p>
+            {semesterProgress && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                <CalendarDays className="h-3 w-3" />
+                Day {semesterProgress.dayX} of {semesterProgress.totalY}
+                {semesterProgress.semesterName ? ` · ${semesterProgress.semesterName}` : ''}
+              </span>
+            )}
+          </div>
           <h1 className="text-2xl font-bold tracking-tight text-stone-900 dark:text-stone-100 mt-0.5 text-balance">
             Today on Campus
           </h1>
@@ -101,6 +132,86 @@ export const TodayView: React.FC = () => {
             ? '1 class scheduled today'
             : `${todaysClasses.length} classes scheduled today`}
         </p>
+      </section>
+
+      {/* Holiday Announcement Banner if today matches a holiday */}
+      {todayHoliday && (
+        <section
+          aria-label="Holiday alert"
+          className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50/90 p-4 text-amber-950 shadow-2xs dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-200/80 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200">
+            <PartyPopper className="h-5 w-5" />
+          </div>
+          <div>
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+              <Sparkles className="h-3 w-3" />
+              University Holiday
+            </span>
+            <p className="text-sm font-bold">{todayHoliday.label}</p>
+          </div>
+        </section>
+      )}
+
+      {/* Compact Next Class Line */}
+      <section
+        aria-label="Next class status"
+        className="flex items-center justify-between rounded-2xl border border-stone-200/90 bg-white p-3.5 shadow-2xs dark:border-stone-800 dark:bg-stone-900"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+              nextClassStatus.state === 'ongoing'
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300'
+                : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400'
+            }`}
+          >
+            <Clock className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 dark:text-stone-500">
+              Next Class
+            </span>
+            <div className="truncate text-xs font-semibold text-stone-900 dark:text-stone-100 mt-0.5">
+              {nextClassStatus.classItem ? (
+                <>
+                  <span className="font-bold text-stone-900 dark:text-stone-50">
+                    {nextClassStatus.classItem.subject}
+                  </span>
+                  {nextClassStatus.classItem.room && (
+                    <span className="text-stone-500 dark:text-stone-400 font-normal ml-1">
+                      (Room {nextClassStatus.classItem.room})
+                    </span>
+                  )}
+                  <span className="mx-1.5 text-stone-300 dark:text-stone-700">·</span>
+                  <span
+                    className={
+                      nextClassStatus.state === 'ongoing'
+                        ? 'font-bold text-emerald-600 dark:text-emerald-400'
+                        : 'text-indigo-600 dark:text-indigo-400'
+                    }
+                  >
+                    {nextClassStatus.text}
+                  </span>
+                </>
+              ) : (
+                <span className="text-stone-500 dark:text-stone-400 font-medium">
+                  {nextClassStatus.text}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {nextClassStatus.classItem && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('routine')}
+            className="min-h-[40px] px-2 text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400 shrink-0 ml-2"
+          >
+            Routine
+          </button>
+        )}
       </section>
 
       <section aria-label="Quick actions">

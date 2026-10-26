@@ -16,6 +16,10 @@ import {
   AlertTriangle,
   X,
   FileCheck,
+  Bell,
+  CalendarDays,
+  Plus,
+  GraduationCap,
 } from 'lucide-react';
 import { useCampusKit } from '../context/CampusKitContext';
 import { Modal } from './Modal';
@@ -25,7 +29,12 @@ import {
 } from '../storage/localStore';
 import { getAttachmentStorageStats } from '../storage/blobDb';
 import { formatBytes, toLocalDateString } from '../utils/dateAndMath';
-import type { ThemePreference, ClockFormat, WeekStart } from '../types/campuskit';
+import type {
+  ThemePreference,
+  ClockFormat,
+  WeekStart,
+  ReminderSettings,
+} from '../types/campuskit';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -46,9 +55,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     exportBackupJson,
     restoreFromValidatedBackup,
     clearAllAppData,
+    semesterSettings,
+    updateSemesterSettings,
+    addHoliday,
+    removeHoliday,
+    requestNotificationPermission,
   } = useCampusKit();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'backup' | 'storage' | 'about'>('general');
+  const [activeTab, setActiveTab] = useState<
+    'general' | 'semester' | 'backup' | 'storage' | 'about'
+  >('general');
+
+  // Grading scale state
+  const [customScale, setCustomScale] = useState(
+    settings.gradingScaleMax ? String(settings.gradingScaleMax) : '4.00'
+  );
+  const [scaleError, setScaleError] = useState<string | null>(null);
+
+  // Semester holiday state
+  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayLabel, setNewHolidayLabel] = useState('');
+  const [holidayError, setHolidayError] = useState<string | null>(null);
 
   // Export state
   const [isExporting, setIsExporting] = useState(false);
@@ -89,8 +116,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       getAttachmentStorageStats().then((res) => {
         setBlobStats(res);
       });
+      setCustomScale(String(settings.gradingScaleMax ?? 4.0));
+      setScaleError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, settings.gradingScaleMax]);
+
+  const handleCustomScaleChange = (valStr: string) => {
+    setCustomScale(valStr);
+    const num = parseFloat(valStr);
+    if (!Number.isFinite(num) || num < 2.0 || num > 10.0) {
+      setScaleError('Scale must be between 2.00 and 10.00.');
+    } else {
+      setScaleError(null);
+      updateSettings({ gradingScaleMax: Math.round(num * 100) / 100 });
+    }
+  };
+
+  const handleToggleReminder = async (key: keyof ReminderSettings) => {
+    const nextVal = !settings.reminders[key];
+    if (nextVal) {
+      await requestNotificationPermission();
+    }
+    updateSettings({
+      reminders: {
+        ...settings.reminders,
+        [key]: nextVal,
+      },
+    });
+  };
+
+  const handleAddHoliday = (e: React.FormEvent) => {
+    e.preventDefault();
+    setHolidayError(null);
+    const trimmedDate = newHolidayDate.trim();
+    const trimmedLabel = newHolidayLabel.trim();
+
+    if (!trimmedDate || !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      setHolidayError('Please select a valid date (YYYY-MM-DD).');
+      return;
+    }
+    if (!trimmedLabel) {
+      setHolidayError('Holiday name or label is required.');
+      return;
+    }
+
+    addHoliday(trimmedDate, trimmedLabel);
+    setNewHolidayDate('');
+    setNewHolidayLabel('');
+  };
 
   // Export JSON Backup
   const handleExportBackup = async () => {
@@ -166,56 +239,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     <Modal isOpen={isOpen} onClose={onClose} title="CampusKit Settings" maxWidthClass="max-w-xl">
       <div className="space-y-5">
         {/* Sub-navigation tabs */}
-        <div className="flex border-b border-stone-200 dark:border-stone-800">
-          <button
-            type="button"
-            onClick={() => setActiveTab('general')}
-            className={`min-h-[44px] flex-1 border-b-2 px-2 text-xs font-semibold transition ${
-              activeTab === 'general'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
-            }`}
-          >
-            Preferences
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('backup')}
-            className={`min-h-[44px] flex-1 border-b-2 px-2 text-xs font-semibold transition ${
-              activeTab === 'backup'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
-            }`}
-          >
-            Backup & Restore
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('storage')}
-            className={`min-h-[44px] flex-1 border-b-2 px-2 text-xs font-semibold transition ${
-              activeTab === 'storage'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
-            }`}
-          >
-            Storage & Reset
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('about')}
-            className={`min-h-[44px] flex-1 border-b-2 px-2 text-xs font-semibold transition ${
-              activeTab === 'about'
-                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
-                : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
-            }`}
-          >
-            About
-          </button>
+        <div className="flex border-b border-stone-200 dark:border-stone-800 overflow-x-auto">
+          {[
+            { id: 'general', label: 'Preferences' },
+            { id: 'semester', label: 'Semester' },
+            { id: 'backup', label: 'Backup' },
+            { id: 'storage', label: 'Storage' },
+            { id: 'about', label: 'About' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`min-h-[44px] flex-1 min-w-[70px] border-b-2 px-2 text-xs font-semibold transition whitespace-nowrap ${
+                activeTab === tab.id
+                  ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+                  : 'border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        {/* GENERAL TAB */}
+        {/* GENERAL PREFERENCES TAB */}
         {activeTab === 'general' && (
-          <div className="space-y-4 pt-1">
+          <div className="space-y-4 pt-1 max-h-[70vh] overflow-y-auto pr-1">
             {/* Theme Preference */}
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">
@@ -309,19 +358,292 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 })}
               </div>
             </div>
+
+            {/* Grading Scale Max */}
+            <div className="border-t border-stone-100 pt-3 dark:border-stone-800">
+              <label className="block text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                Grading Scale Max
+              </label>
+              <p className="mt-0.5 text-[11px] text-stone-400">
+                Configures CGPA tab calculations and What-If thresholds (default 4.00, 5.00, or custom 2.00–10.00).
+              </p>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomScale('4.00');
+                    setScaleError(null);
+                    updateSettings({ gradingScaleMax: 4.0 });
+                  }}
+                  className={`inline-flex min-h-[44px] items-center justify-center rounded-xl border p-2 text-xs font-medium transition active:scale-95 ${
+                    settings.gradingScaleMax === 4.0
+                      ? 'border-indigo-600 bg-indigo-50 font-semibold text-indigo-700 ring-2 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300'
+                      : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300'
+                  }`}
+                >
+                  4.00 (Standard)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomScale('5.00');
+                    setScaleError(null);
+                    updateSettings({ gradingScaleMax: 5.0 });
+                  }}
+                  className={`inline-flex min-h-[44px] items-center justify-center rounded-xl border p-2 text-xs font-medium transition active:scale-95 ${
+                    settings.gradingScaleMax === 5.0
+                      ? 'border-indigo-600 bg-indigo-50 font-semibold text-indigo-700 ring-2 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300'
+                      : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300'
+                  }`}
+                >
+                  5.00 Scale
+                </button>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="2.00"
+                    max="10.00"
+                    placeholder="Custom"
+                    value={customScale}
+                    onChange={(e) => handleCustomScaleChange(e.target.value)}
+                    className="w-full min-h-[44px] px-3 text-center rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-xs font-semibold text-stone-900 dark:text-stone-100 focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+              {scaleError && (
+                <p className="mt-1 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                  {scaleError}
+                </p>
+              )}
+            </div>
+
+            {/* In-App Reminders */}
+            <div className="border-t border-stone-100 pt-3 dark:border-stone-800 space-y-3">
+              <div className="flex items-center gap-1.5">
+                <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <label className="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                  In-App Reminders
+                </label>
+              </div>
+
+              {/* Mandatory Disclaimer */}
+              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 p-3 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                Reminders only work while the app is open. CampusKit cannot send notifications while the app is closed.
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center justify-between p-3 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 cursor-pointer">
+                  <div className="pr-3">
+                    <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
+                      Class Reminders
+                    </p>
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                      Notifies when a class starts within 60 minutes
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.reminders?.classReminders ?? true}
+                    onChange={() => handleToggleReminder('classReminders')}
+                    className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between p-3 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 cursor-pointer">
+                  <div className="pr-3">
+                    <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
+                      Upcoming Deadlines
+                    </p>
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                      Notifies when an unfinished exam or assignment is due tomorrow
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.reminders?.deadlineReminders ?? true}
+                    onChange={() => handleToggleReminder('deadlineReminders')}
+                    className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between p-3 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 cursor-pointer">
+                  <div className="pr-3">
+                    <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
+                      Attendance Risk Alerts
+                    </p>
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                      Alerts if any course drops below its minimum required percentage
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.reminders?.attendanceRiskReminders ?? true}
+                    onChange={() => handleToggleReminder('attendanceRiskReminders')}
+                    className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 shrink-0"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SEMESTER & HOLIDAYS TAB */}
+        {activeTab === 'semester' && (
+          <div className="space-y-4 pt-1 max-h-[70vh] overflow-y-auto pr-1">
+            <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/60 space-y-3">
+              <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
+                <CalendarDays className="h-4 w-4" />
+                Current Semester Range
+              </span>
+              <p className="text-xs text-stone-500 dark:text-stone-400">
+                Setting semester dates enables the &ldquo;Day X of Y&rdquo; progress badge on your Today dashboard.
+              </p>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                  Semester Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Spring 2025, Fall 2024"
+                  value={semesterSettings.semesterName}
+                  onChange={(e) => updateSemesterSettings({ semesterName: e.target.value })}
+                  className="w-full min-h-[44px] px-3 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    value={semesterSettings.startDate}
+                    onChange={(e) => updateSemesterSettings({ startDate: e.target.value })}
+                    className="w-full min-h-[44px] px-3 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    value={semesterSettings.endDate}
+                    onChange={(e) => updateSemesterSettings({ endDate: e.target.value })}
+                    className="w-full min-h-[44px] px-3 rounded-xl border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Holidays List & Add */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-stone-900 dark:text-stone-100">
+                    Semester Holidays
+                  </h3>
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    CampusKit highlights holiday banners on your Today dashboard on matching dates.
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleAddHoliday} className="p-3 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-600 dark:text-stone-400 mb-1">
+                      Holiday Date *
+                    </label>
+                    <input
+                      type="date"
+                      value={newHolidayDate}
+                      onChange={(e) => setNewHolidayDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-600 dark:text-stone-400 mb-1">
+                      Holiday Name *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Eid-ul-Fitr, Pohela Boishakh"
+                      value={newHolidayLabel}
+                      onChange={(e) => setNewHolidayLabel(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-xl border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                    />
+                  </div>
+                </div>
+
+                {holidayError && (
+                  <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+                    {holidayError}
+                  </p>
+                )}
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-4 text-xs font-semibold transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Holiday</span>
+                  </button>
+                </div>
+              </form>
+
+              {semesterSettings.holidays.length === 0 ? (
+                <div className="p-4 text-center rounded-xl border border-dashed border-stone-200 dark:border-stone-800 text-xs text-stone-400">
+                  No holidays logged yet. Add university recesses or government holidays.
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {semesterSettings.holidays
+                    .slice()
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .map((h) => (
+                      <div
+                        key={h.id}
+                        className="flex items-center justify-between p-2.5 rounded-xl border border-stone-200/80 dark:border-stone-800 bg-white dark:bg-stone-900 text-xs"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <span className="font-semibold text-stone-900 dark:text-stone-100">
+                            {h.label}
+                          </span>
+                          <span className="ml-2 font-mono text-[11px] text-stone-400">
+                            {h.date}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeHoliday(h.id)}
+                          aria-label={`Remove ${h.label}`}
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-stone-400 hover:text-rose-600"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* BACKUP & RESTORE TAB */}
         {activeTab === 'backup' && (
-          <div className="space-y-4 pt-1">
+          <div className="space-y-4 pt-1 max-h-[70vh] overflow-y-auto pr-1">
             {/* Export Section */}
             <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/60">
               <h3 className="text-sm font-bold text-stone-900 dark:text-stone-100">
                 Export Full Backup
               </h3>
               <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-                Generates a single offline JSON file containing your routine, attendance history, CGPA, deadlines, study logs, and notes with photo/voice attachments.
+                Generates a single offline JSON file containing your routine, courses, attendance history, CGPA, deadlines, study logs, semester settings, and notes with photo/voice attachments.
               </p>
               <div className="mt-3 flex items-center gap-3">
                 <button
@@ -392,10 +714,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-stone-600 dark:text-stone-300 sm:grid-cols-4">
                     <div>Classes: {pendingBackup.routine.length}</div>
+                    <div>Courses: {pendingBackup.courses?.length ?? 0}</div>
                     <div>Attendance: {pendingBackup.attendance.length}</div>
                     <div>Deadlines: {pendingBackup.deadlines.length}</div>
                     <div>Semesters: {pendingBackup.semesters.length}</div>
-                    <div>Courses: {pendingBackup.courses.length}</div>
                     <div>Study Logs: {pendingBackup.studySessions.length}</div>
                     <div>Notes: {pendingBackup.notes.length}</div>
                     <div>Attachments: {pendingBackup.attachmentBlobs.length}</div>
@@ -454,7 +776,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
         {/* STORAGE & RESET TAB */}
         {activeTab === 'storage' && (
-          <div className="space-y-4 pt-1">
+          <div className="space-y-4 pt-1 max-h-[70vh] overflow-y-auto pr-1">
             {/* Storage Estimation */}
             <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/60">
               <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">
@@ -558,10 +880,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
         {/* ABOUT & PRIVACY TAB */}
         {activeTab === 'about' && (
-          <div className="space-y-4 pt-1">
+          <div className="space-y-4 pt-1 max-h-[70vh] overflow-y-auto pr-1">
             <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/60">
               <span className="text-xs font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
-                CampusKit v1.0.0
+                CampusKit v1.1.0
               </span>
               <h3 className="mt-1 text-base font-bold text-stone-900 dark:text-stone-100">
                 Free Offline Student Productivity Suite
