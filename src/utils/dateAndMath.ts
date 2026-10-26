@@ -593,6 +593,19 @@ export function computeStudyAnalytics(
   };
 }
 
+/**
+ * Timer-completion dedupe rule (previously inline in CampusKitContext):
+ * a completed timer saves a study session only for a focus preset that has
+ * not already been saved for the current session token. Break presets
+ * never save, and a second completion of the same session never re-saves.
+ */
+export function shouldSaveCompletedTimerSession(
+  mode: 'focus' | 'break',
+  alreadySaved: boolean
+): boolean {
+  return mode === 'focus' && !alreadySaved;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;

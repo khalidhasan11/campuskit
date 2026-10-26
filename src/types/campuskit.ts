@@ -163,6 +163,25 @@ export interface SerializedBackupAttachment extends NoteAttachmentMeta {
   base64: string;
 }
 
+/**
+ * Transcript calculator state as stored in a backup archive. Mirrors the
+ * TranscriptCalculator's own persisted shape (prevCgpa / prevCredits as
+ * strings, course rows with name/grade/credit). Added in v1.1.0: before
+ * that, the transcript calculator lived under its own localStorage key and
+ * was deliberately NOT part of the backup archive.
+ */
+export interface TranscriptBackupState {
+  prevCgpa: string;
+  prevCredits: string;
+  rows: TranscriptRowShape[];
+}
+
+export interface TranscriptRowShape {
+  name: string;
+  grade: string;
+  credit: string;
+}
+
 export interface BackupManifest {
   app: 'CampusKit';
   schemaVersion: 1;
@@ -178,6 +197,7 @@ export interface BackupManifest {
     attachments: number;
     routineCourses?: number;
     holidays?: number;
+    transcriptRows?: number;
   };
 }
 
@@ -195,5 +215,6 @@ export interface BackupArchive {
     attachments: SerializedBackupAttachment[];
     routineCourses?: RoutineCourse[];
     semesterSettings?: SemesterSettings;
+    transcript?: TranscriptBackupState;
   };
 }

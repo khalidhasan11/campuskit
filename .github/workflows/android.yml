@@ -55,6 +55,9 @@ jobs:
       - name: TypeScript check
         run: npm run lint
 
+      - name: Unit tests
+        run: npm test
+
       - name: Build web assets
         run: npm run build
 

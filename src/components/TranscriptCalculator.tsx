@@ -9,6 +9,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Modal } from './Modal';
+import { STORAGE_KEYS } from '../storage/localStore';
 import {
   GRADE_OPTIONS,
   GRADE_POINTS_TENTHS,
@@ -25,10 +26,11 @@ import {
  * its source and reproduced in src/utils/transcriptCgpa.ts).
  *
  * State is persisted additively under its own versioned localStorage key.
- * It is intentionally NOT part of the main backup archive (see the project
- * report's known-limitations list).
+ * Since v1.1.0 it IS part of the main backup archive (see localStore.ts:
+ * BackupArchive.transcript) and is removed by clear-all, so backup and
+ * clear-all agree.
  */
-const TRANSCRIPT_STORAGE_KEY = 'campuskit_v1_transcript_calculator';
+const TRANSCRIPT_STORAGE_KEY = STORAGE_KEYS.transcript;
 
 interface TranscriptState {
   prevCgpa: string;
@@ -86,6 +88,14 @@ export const TranscriptCalculator: React.FC = () => {
       // Storage full/blocked: the calculator keeps working in-memory.
     }
   }, [state]);
+
+  // Reload after a backup restore or clear-all changes the storage key
+  // underneath this component's in-memory state (dispatched by context).
+  useEffect(() => {
+    const reload = () => setState(loadState());
+    window.addEventListener('campuskit:transcript-restored', reload);
+    return () => window.removeEventListener('campuskit:transcript-restored', reload);
+  }, []);
 
   const result = useMemo(
     () =>

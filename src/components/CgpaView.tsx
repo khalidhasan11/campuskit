@@ -348,7 +348,11 @@ export const CgpaView: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deleteSemester(sem.id)}
+                        onClick={() => {
+                          if (window.confirm(`Delete the completed semester "${sem.name}"? This cannot be undone.`)) {
+                            deleteSemester(sem.id);
+                          }
+                        }}
                         aria-label={`Delete ${sem.name}`}
                         className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-stone-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                       >
@@ -440,7 +444,11 @@ export const CgpaView: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => deleteCourse(c.id)}
+                      onClick={() => {
+                        if (window.confirm(`Delete the course "${c.name}"? This cannot be undone.`)) {
+                          deleteCourse(c.id);
+                        }
+                      }}
                       aria-label={`Delete ${c.name}`}
                       className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-stone-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                     >

@@ -24,6 +24,7 @@ import {
 import { useCampusKit } from '../context/CampusKitContext';
 import { Modal } from './Modal';
 import {
+  MAX_BACKUP_FILE_BYTES,
   parseAndValidateBackupJson,
   ValidatedBackupPayload,
 } from '../storage/localStore';
@@ -195,6 +196,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     setPendingBackup(null);
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Pre-check before reading: an oversized file is rejected without
+    // being read fully into memory first.
+    if (file.size > MAX_BACKUP_FILE_BYTES) {
+      setImportError(
+        `Backup file is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). The maximum supported archive size is ${MAX_BACKUP_FILE_BYTES / 1024 / 1024} MB.`
+      );
+      if (importFileRef.current) importFileRef.current.value = '';
+      return;
+    }
 
     try {
       const text = await file.text();
@@ -721,6 +732,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     <div>Study Logs: {pendingBackup.studySessions.length}</div>
                     <div>Notes: {pendingBackup.notes.length}</div>
                     <div>Attachments: {pendingBackup.attachmentBlobs.length}</div>
+                    <div>Transcript rows: {pendingBackup.transcript.rows.length}</div>
                   </div>
 
                   <div className="mt-3 border-t border-indigo-200/60 pt-3 dark:border-indigo-900/60">

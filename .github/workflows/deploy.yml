@@ -12,7 +12,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
-      - run: npm run lint        # tsc --noEmit (this project has no unit-test suite)
+      - run: npm run lint        # tsc --noEmit
+      - run: npm test            # vitest suite (math, CSV parser, grading scale, backup validation)
       # No --base flag needed: vite.config.ts sets base: './', so the bundle,
       # index.html refs, manifest, service-worker registration and the SW
       # precache list are all base-relative and work under the /campuskit/

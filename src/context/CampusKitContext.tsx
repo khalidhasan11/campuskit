@@ -41,6 +41,7 @@ import {
   createId,
   executeValidatedRestore,
   loadInitialSnapshot,
+  readTranscriptStateFromStorage,
   ValidatedBackupPayload,
   writeStorageJson,
 } from '../storage/localStore';
@@ -49,6 +50,7 @@ import {
   computeAttendanceMetrics,
   formatLocalDateReadable,
   parseMinutesFromMidnight,
+  shouldSaveCompletedTimerSession,
   toLocalDateString,
 } from '../utils/dateAndMath';
 
@@ -907,7 +909,12 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     if (studyTimer.status === 'running' && timerRemainingMs <= 0) {
       const preset = STUDY_PRESETS[studyTimer.presetId];
-      if (preset.mode === 'focus' && studyTimer.savedSessionToken !== studyTimer.sessionToken) {
+      if (
+        shouldSaveCompletedTimerSession(
+          preset.mode,
+          studyTimer.savedSessionToken === studyTimer.sessionToken
+        )
+      ) {
         const dateStr = toLocalDateString(new Date());
         const focusMins = Math.round(preset.minutes);
         const newSession: StudySession = {
@@ -1163,6 +1170,9 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       studyTimer,
       notes,
       pendingCleanupIds,
+      // Transcript state lives in its own component, not in this context,
+      // so it is read fresh from its storage key at export time.
+      transcript: readTranscriptStateFromStorage(),
     };
     const archive = await buildBackupArchive(currentSnap);
     return JSON.stringify(archive, null, 2);
@@ -1197,8 +1207,15 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         studyTimer,
         notes,
         pendingCleanupIds,
+        transcript: readTranscriptStateFromStorage(),
       };
       const restored = await executeValidatedRestore(currentSnap, payload, mode);
+      // The transcript calculator keeps its own in-memory state, so tell
+      // it to reload from the restored storage key (replace mode) or the
+      // unchanged key (merge mode keeps the current transcript).
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('campuskit:transcript-restored'));
+      }
       setSettings(restored.settings);
       setRoutine(restored.routine);
       setRoutineCourses(restored.routineCourses);
@@ -1253,6 +1270,11 @@ export const CampusKitProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setNotes([]);
       setActiveNoteId(null);
       setPendingCleanupIds([]);
+      // STORAGE_KEYS now includes the transcript key, so the loop above
+      // already removed it; notify its component to reset to blank state.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('campuskit:transcript-restored'));
+      }
       return { ok: true };
     } catch (err) {
       return {

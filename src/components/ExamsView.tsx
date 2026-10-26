@@ -321,7 +321,11 @@ export const ExamsView: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => deleteDeadline(item.id)}
+                      onClick={() => {
+                        if (window.confirm(`Delete the deadline "${item.title}"? This cannot be undone.`)) {
+                          deleteDeadline(item.id);
+                        }
+                      }}
                       aria-label={`Delete ${item.title}`}
                       className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-stone-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                     >

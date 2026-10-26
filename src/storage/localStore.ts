@@ -19,11 +19,17 @@ import type {
   SerializedBackupAttachment,
   StoredAttachmentBlob,
   StudyPresetId,
+  TranscriptBackupState,
   StudySession,
   ThemePreference,
   WeekStart,
 } from '../types/campuskit';
 import { parseLocalDateParts, parseMinutesFromMidnight } from '../utils/dateAndMath';
+import {
+  GRADE_POINTS_TENTHS,
+  createBlankRows,
+  type TranscriptRow,
+} from '../utils/transcriptCgpa';
 import {
   base64ToBlob,
   blobToBase64,
@@ -45,6 +51,10 @@ export const STORAGE_KEYS = {
   routineCourses: 'campuskit_v1_routine_courses',
   semesterSettings: 'campuskit_v1_semester_settings',
   remindersSent: 'campuskit_v1_reminders_sent',
+  // Transcript calculator state. In STORAGE_KEYS since v1.1.0 so that
+  // clear-all and restore rollback handle it exactly like every other
+  // collection (before v1.1.0 it was excluded from both).
+  transcript: 'campuskit_v1_transcript_calculator',
 } as const;
 
 export const MAX_BACKUP_FILE_BYTES = 80 * 1024 * 1024;
@@ -97,6 +107,55 @@ function isNonEmptyString(v: unknown, maxLen = 500): v is string {
 
 function isValidTimestamp(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0;
+}
+
+/**
+ * Transcript calculator state for backup/restore (v1.1.0+). Sanitization
+ * mirrors the TranscriptCalculator's own rules: unknown grades fall back
+ * to 'A', names are capped at 12 chars, credits at 6 chars, and an empty
+ * or corrupt value becomes 5 blank rows with blank transcript inputs.
+ * A missing transcript section in an older archive is NOT an error — it
+ * simply restores as the blank default, so v1.0.0 backups still import.
+ */
+export function validateTranscriptState(raw: unknown): TranscriptBackupState {
+  const blank: TranscriptBackupState = {
+    prevCgpa: '',
+    prevCredits: '',
+    rows: createBlankRows(5),
+  };
+  if (!isObject(raw)) return blank;
+  const prevCgpa = typeof raw.prevCgpa === 'string' ? raw.prevCgpa.slice(0, 10) : '';
+  const prevCredits =
+    typeof raw.prevCredits === 'string' ? raw.prevCredits.slice(0, 10) : '';
+  const rows: TranscriptRow[] = [];
+  if (Array.isArray(raw.rows)) {
+    for (const r of raw.rows) {
+      if (!isObject(r)) continue;
+      const grade =
+        typeof r.grade === 'string' && r.grade in GRADE_POINTS_TENTHS ? r.grade : 'A';
+      rows.push({
+        name: typeof r.name === 'string' ? r.name.slice(0, 12) : '',
+        grade,
+        credit: typeof r.credit === 'string' ? r.credit.slice(0, 6) : '',
+      });
+    }
+  }
+  return {
+    prevCgpa,
+    prevCredits,
+    rows: rows.length > 0 ? rows : createBlankRows(5),
+  };
+}
+
+/** Reads the transcript calculator's own localStorage key, sanitized. */
+export function readTranscriptStateFromStorage(): TranscriptBackupState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.transcript);
+    if (!raw) return validateTranscriptState(null);
+    return validateTranscriptState(JSON.parse(raw));
+  } catch {
+    return validateTranscriptState(null);
+  }
 }
 
 export function validateSettings(raw: unknown): AppSettings {
@@ -540,6 +599,7 @@ export interface LocalSnapshot {
   studyTimer: PersistedTimerState;
   notes: NoteItem[];
   pendingCleanupIds: string[];
+  transcript: TranscriptBackupState;
 }
 
 export function loadInitialSnapshot(): LocalSnapshot {
@@ -593,6 +653,7 @@ export function loadInitialSnapshot(): LocalSnapshot {
     studyTimer,
     notes: readJsonList(STORAGE_KEYS.notes, validateNoteItem),
     pendingCleanupIds,
+    transcript: readTranscriptStateFromStorage(),
   };
 }
 
@@ -647,6 +708,7 @@ export async function buildBackupArchive(snapshot: LocalSnapshot): Promise<Backu
       attachments: serializedAttachments.length,
       routineCourses: snapshot.routineCourses.length,
       holidays: snapshot.semesterSettings.holidays.length,
+      transcriptRows: snapshot.transcript.rows.length,
     },
   };
 
@@ -664,6 +726,7 @@ export async function buildBackupArchive(snapshot: LocalSnapshot): Promise<Backu
       attachments: serializedAttachments,
       routineCourses: snapshot.routineCourses,
       semesterSettings: snapshot.semesterSettings,
+      transcript: snapshot.transcript,
     },
   };
 }
@@ -681,6 +744,7 @@ export interface ValidatedBackupPayload {
   studySessions: StudySession[];
   notes: NoteItem[];
   attachmentBlobs: StoredAttachmentBlob[];
+  transcript: TranscriptBackupState;
 }
 
 function validateStrictArray<T extends { id: string }>(
@@ -760,6 +824,10 @@ export function parseAndValidateBackupJson(jsonText: string): ValidatedBackupPay
     ? validateSemesterSettings(d.semesterSettings)
     : { ...DEFAULT_SEMESTER_SETTINGS };
 
+  // Transcript state is optional in the archive: v1.0.0 backups predate it
+  // and restore as the blank default instead of failing.
+  const transcript = validateTranscriptState(d.transcript);
+
   if (!Array.isArray(d.attachments)) {
     throw new Error('Invalid backup format: "attachments" must be an array.');
   }
@@ -807,6 +875,34 @@ export function parseAndValidateBackupJson(jsonText: string): ValidatedBackupPay
     }
   }
 
+  // Manifest-count cross-check (defence-in-depth on top of the per-record
+  // validation above): any count the manifest actually states must match
+  // the data that was validated. Counts absent from older manifests
+  // (routineCourses, holidays, transcriptRows in v1.0.0 archives) are
+  // skipped, so old backups still import.
+  if (isObject(parsed.manifest.counts)) {
+    const counts = parsed.manifest.counts as Record<string, unknown>;
+    const checkCount = (key: string, actual: number) => {
+      const stated = counts[key];
+      if (typeof stated === 'number' && stated !== actual) {
+        throw new Error(
+          `Backup manifest count mismatch for "${key}": manifest says ${stated} but the archive contains ${actual}.`
+        );
+      }
+    };
+    checkCount('routine', routine.length);
+    checkCount('attendance', attendance.length);
+    checkCount('semesters', semesters.length);
+    checkCount('courses', courses.length);
+    checkCount('deadlines', deadlines.length);
+    checkCount('studySessions', studySessions.length);
+    checkCount('notes', notes.length);
+    checkCount('attachments', attachmentBlobs.length);
+    checkCount('routineCourses', routineCourses.length);
+    checkCount('holidays', semesterSettings.holidays.length);
+    checkCount('transcriptRows', transcript.rows.length);
+  }
+
   return {
     manifest: parsed.manifest as unknown as BackupArchive['manifest'],
     settings,
@@ -820,6 +916,7 @@ export function parseAndValidateBackupJson(jsonText: string): ValidatedBackupPay
     studySessions,
     notes,
     attachmentBlobs,
+    transcript,
   };
 }
 
@@ -892,6 +989,7 @@ export async function executeValidatedRestore(
       studyTimer: { ...DEFAULT_TIMER_STATE, sessionToken: createId() },
       notes: payload.notes,
       pendingCleanupIds: [],
+      transcript: payload.transcript,
     };
     nextBlobs = payload.attachmentBlobs;
   } else {
@@ -980,6 +1078,11 @@ export async function executeValidatedRestore(
       studyTimer: current.studyTimer,
       notes: mergedNotes,
       pendingCleanupIds: current.pendingCleanupIds,
+      // Transcript state is a single record, not a list, so it cannot be
+      // merged record-by-record: merge keeps the current transcript and
+      // only replace mode takes the backup's. The restore preview lists
+      // the backup's transcript row count so the choice is visible.
+      transcript: current.transcript,
     };
     nextBlobs = Array.from(blobMap.values());
   }
@@ -998,6 +1101,7 @@ export async function executeValidatedRestore(
     writeStorageJson(STORAGE_KEYS.studyTimer, nextSnapshot.studyTimer);
     writeStorageJson(STORAGE_KEYS.notes, nextSnapshot.notes);
     writeStorageJson(STORAGE_KEYS.pendingCleanupIds, nextSnapshot.pendingCleanupIds);
+    writeStorageJson(STORAGE_KEYS.transcript, nextSnapshot.transcript);
     return nextSnapshot;
   } catch (err) {
     try {

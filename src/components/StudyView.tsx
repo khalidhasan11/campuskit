@@ -414,7 +414,11 @@ export const StudyView: React.FC = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={() => deleteStudySession(sess.id)}
+                    onClick={() => {
+                      if (window.confirm(`Delete this ${sess.minutes}-minute study session? This cannot be undone.`)) {
+                        deleteStudySession(sess.id);
+                      }
+                    }}
                     aria-label={`Delete study session ${sess.label}`}
                     className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-stone-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
                   >
